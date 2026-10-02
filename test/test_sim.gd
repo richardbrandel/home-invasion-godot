@@ -1,0 +1,196 @@
+extends SceneTree
+
+## Headless tests for the GDScript simulation port.
+##   godot --headless --path . --script test/test_sim.gd
+##
+## The JS version of this simulation was already debugged; these tests exist to
+## catch TRANSCRIPTION errors in the port, not to rediscover known bugs.
+
+var n_pass := 0
+var n_fail := 0
+
+
+func check(label: String, ok: bool, detail: String = "") -> void:
+	if ok:
+		print("  PASS  ", label)
+		n_pass += 1
+	else:
+		print("  FAIL  ", label)
+		if detail != "":
+			print("        ", detail)
+		n_fail += 1
+
+
+func _banner(t: String) -> void:
+	print("\n", t)
+
+
+func _init() -> void:
+	_banner("geometry + navigation")
+
+	# ---- every nav edge must be a clear straight line
+	var bad := ""
+	for k in Sim.NODES:
+		for m in Sim.NODES[k]["edges"]:
+			var a: Vector2 = Sim.NODES[k]["pos"]
+			var b: Vector2 = Sim.NODES[m]["pos"]
+			for s in Sim.SOLIDS:
+				if Sim.seg_rect(a, b, s):
+					bad = "%s -> %s crosses a solid" % [k, m]
+	check("every nav edge is a clear straight line", bad == "", bad)
+
+	# ---- every loot spot reachable from its node
+	bad = ""
+	for l in Sim.LOOT_SPOTS:
+		var node: Vector2 = Sim.NODES[l["node"]]["pos"]
+		for s in Sim.SOLIDS:
+			if Sim.seg_rect(node, l["pos"], s):
+				bad = "loot %s is behind a solid" % l["label"]
+	check("each loot spot is reachable from its nav node", bad == "", bad)
+
+	# ---- the doorway is genuinely open
+	check("the door gap is open",
+		not Sim.los_blocked(Vector2(0, 2.5), Vector2(0, -4.5)))
+
+	# ---- line of sight
+	check("LOS blocked through a wall, clear inside",
+		Sim.los_blocked(Vector2(0, -19), Vector2(0, -25))
+		and not Sim.los_blocked(Vector2(0, -8), Vector2(0, -12)))
+
+	# ---- collision pushes an entity out
+	var wall: Rect2 = Sim.WALLS[0]
+	var e := wall.position + Vector2(0.05, 0.05)
+	var pushed := Sim.resolve_circle(e, 0.45)
+	var inside := pushed.x > wall.position.x and pushed.x < wall.end.x \
+		and pushed.y > wall.position.y and pushed.y < wall.end.y
+	check("collision pushes an entity out of a wall", not inside,
+		"still inside at %s" % pushed)
+
+	# ---- pathfinding
+	var route := Sim.route_to("van", "living")
+	check("pathfinding returns a connected route", route.size() >= 3,
+		"got %d hops" % route.size())
+
+	_banner("thief AI")
+
+	# ---- full heist against an idle player
+	var player := Sim.create_player()
+	var thief := Sim.create_thief()
+	var loot := Sim.create_loot()
+	var events: Array = []
+	var dt := 1.0 / 60.0
+	var t := 0.0
+	var reroutes := 0
+	while t < 180.0 and Sim.remaining(loot) > 0:
+		Sim.step_thief(thief, player, loot, events, dt)
+		for ev in events:
+			if ev["type"] == "reroute":
+				reroutes += 1
+		events.clear()
+		t += dt
+	check("thief completes a full heist against an idle player",
+		Sim.remaining(loot) == 0,
+		"delivered %d/3 in %.1fs" % [3 - Sim.remaining(loot), t])
+	print("        cleared 3 items in %.1fs, %d re-routes" % [t, reroutes])
+	check("thief does not thrash while heisting", reroutes <= 2,
+		"%d re-routes" % reroutes)
+
+	# ---- thief stays in bounds
+	player = Sim.create_player()
+	thief = Sim.create_thief()
+	loot = Sim.create_loot()
+	events = []
+	var oob := ""
+	for i in 60 * 120:
+		Sim.step_thief(thief, player, loot, events, dt)
+		events.clear()
+		var p: Vector2 = thief["pos"]
+		if p.x < Sim.BOUNDS.position.x - 0.01 or p.x > Sim.BOUNDS.end.x + 0.01 \
+		or p.y < Sim.BOUNDS.position.y - 0.01 or p.y > Sim.BOUNDS.end.y + 0.01:
+			oob = "left bounds at %s" % p
+			break
+		if not thief["alive"]:
+			break
+	check("thief never drifts outside the world bounds", oob == "", oob)
+
+	# ---- THE invariant: never fire without line of sight
+	player = Sim.create_player()
+	thief = Sim.create_thief()
+	loot = Sim.create_loot()
+	var shots := 0
+	var violation := ""
+	var blocked_frames := 0
+	for i in 60 * 90:
+		player["pos"] = Vector2(sin(i / 97.0) * 9.0, -13.0 + cos(i / 131.0) * 6.0)
+		if Sim.los_blocked(thief["pos"], player["pos"]):
+			blocked_frames += 1
+		events = []
+		Sim.step_thief(thief, player, loot, events, dt)
+		for ev in events:
+			if ev["type"] == "thiefShot":
+				shots += 1
+				if Sim.los_blocked(thief["pos"], player["pos"]):
+					violation = "fired through a wall at frame %d" % i
+					break
+		if violation != "":
+			break
+	check("thief NEVER fires while line of sight is blocked", violation == "", violation)
+	check("the invariant test actually exercised the path", shots > 0,
+		"no shots taken at all")
+	print("        %d shots, all with LOS (%d blocked frames available)" % [shots, blocked_frames])
+
+	_banner("visibility + minimap fog of war")
+
+	check("rayCast stops at a wall",
+		Sim.ray_cast_px(Vector2(0, -18.5), Vector2(0, -1), 60.0) < 2.0)
+	check("rayCast travels full range over open ground",
+		is_equal_approx(Sim.ray_cast_px(Vector2(0, 10), Vector2(0, 1), 60.0), 60.0))
+	check("canSee false through a wall, true across open floor",
+		not Sim.can_see(Vector2(0, -18), Vector2(0, -23))
+		and Sim.can_see(Vector2(0, -8), Vector2(0, -13)))
+	check("canSee respects the sight radius",
+		not Sim.can_see(Vector2(0, 20), Vector2(0, -20), 10.0))
+
+	# ---- the user's actual requirement
+	var homeowner := Vector2(0, -13)
+	var behind_wall := Vector2(8, 12)
+	var in_doorway := Vector2(0, 0)
+	check("THE REQUIREMENT: intruder hidden behind a wall, visible through the doorway",
+		not Sim.can_see(homeowner, behind_wall, 28.0) and Sim.can_see(homeowner, in_doorway, 28.0),
+		"behind_wall=%s doorway=%s" % [Sim.can_see(homeowner, behind_wall, 28.0), Sim.can_see(homeowner, in_doorway, 28.0)])
+
+	# ---- visibility polygon sanity
+	var poly := Sim.visibility_polygon(Vector2(0, -18), 28.0)
+	var bad_pt := ""
+	var maxd := 0.0
+	for p in poly:
+		maxd = maxf(maxd, p.distance_to(Vector2(0, -18)))
+		for s in Sim.SOLIDS:
+			if p.x > s.position.x + 1e-6 and p.x < s.end.x - 1e-6 \
+			and p.y > s.position.y + 1e-6 and p.y < s.end.y - 1e-6:
+				bad_pt = "vertex inside a solid: %s" % p
+	check("visibility polygon stays in range and out of solids",
+		poly.size() > 20 and bad_pt == "" and maxd <= 28.01, bad_pt)
+	print("        %d polygon points, max reach %.1f m" % [poly.size(), maxd])
+
+	# ---- polygon cost
+	var t0 := Time.get_ticks_usec()
+	for i in 200:
+		Sim.visibility_polygon(Vector2(sin(i) * 3.0, -11.5), 30.0)
+	var ms := (Time.get_ticks_usec() - t0) / 1000.0 / 200.0
+	check("visibility polygon is cheap enough for every frame", ms < 4.0,
+		"%.3f ms per polygon" % ms)
+	print("        %.3f ms per polygon, 200 sampled" % ms)
+
+	_banner("damage")
+	var th := Sim.create_thief()
+	events = []
+	check("lethal damage kills the thief and emits thiefDown",
+		Sim.damage_thief(th, 150.0, events) and not th["alive"])
+	var pl := Sim.create_player()
+	events = []
+	check("player death clamps hp at zero",
+		Sim.damage_player(pl, 999.0, events) and pl["hp"] == 0.0)
+
+	print("\n%d passed, %d failed\n" % [n_pass, n_fail])
+	quit(1 if n_fail > 0 else 0)

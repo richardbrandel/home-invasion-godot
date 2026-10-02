@@ -1,0 +1,17 @@
+# Godot's import cache — regenerated on open, never commit it.
+.godot/
+# Build outputs. These ship as GitHub Releases assets, not in the repo:
+# the .exe is 284 MB and GitHub hard-rejects any file over 100 MB.
+build/
+*.exe
+*.pck
+*.app/
+
+# Mixamo assets. Their terms permit commercial use IN A GAME but forbid
+# redistributing the raw files — and thief/idle.fbx alone is 106 MB, over
+# GitHub's 100 MB file limit, so it could not be pushed regardless.
+assets/mixamo/
+
+# Transient editor state
+*.tmp
+*.translation
