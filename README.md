@@ -106,6 +106,28 @@ but forbid redistributing the raw assets, and the largest file is 106 MB — ove
 GitHub's 100 MB per-file limit, so it could not be pushed either way. Build
 outputs are excluded for the same size reason and ship as Release assets instead.
 
+**This means a fresh clone cannot run until you fetch the characters.** The
+published builds are unaffected — they already contain them.
+
+### Restoring the character assets
+
+`tools/mixamo-fetch.py` pulls them from Mixamo using your own free account, so
+nothing is redistributed:
+
+1. Sign in at [mixamo.com](https://www.mixamo.com), open the browser console, and run
+   `copy(localStorage.access_token)`.
+2. Save that token to `~/.dsh/mixamo-token` — e.g. `pbpaste > ~/.dsh/mixamo-token`
+   followed by `chmod 600 ~/.dsh/mixamo-token`.
+3. Run:
+
+   ```sh
+   python3 tools/mixamo-fetch.py fetch assets/mixamo both
+   ```
+
+That downloads nine clips each for two characters, using `skin: false` for
+everything except the first clip so the mesh is only stored once. Open the
+project in Godot afterwards to trigger a reimport.
+
 ## Credits
 
 - Characters: [Mixamo](https://www.mixamo.com) (Adobe)
