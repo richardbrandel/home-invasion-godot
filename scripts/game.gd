@@ -327,7 +327,11 @@ func _process(delta: float) -> void:
 			player_moving = true
 			# camera-relative: forward is the yaw direction in XZ
 			var fwd := Vector2(sin(yaw), cos(yaw))
-			var right := Vector2(cos(yaw), -sin(yaw))
+			# Camera-RIGHT, computed rather than guessed. Godot's basis is
+			# right-handed and the camera looks down -Z, so at yaw 0 — looking
+			# toward +Z — its right vector is -X, not +X. The old (cos, -sin) was
+			# the mirror of this, which is exactly why A strafed right and D left.
+			var right := Vector2(-cos(yaw), sin(yaw))
 			var dir := (fwd * -axis.y + right * axis.x).normalized()
 			var p: Vector2 = player["pos"] + dir * speed * delta
 			p = Sim.resolve_circle(p, Sim.PLAYER_RADIUS)
@@ -358,6 +362,11 @@ func _process(delta: float) -> void:
 
 	if _shot_frames > 0:
 		_shot_frames -= 1
+		# stderr on purpose: print() is block-buffered when redirected, so a run
+		# that has to be killed loses every stdout line and looks like a hang
+		# with no cause. This one survives.
+		if _shot_frames % 20 == 0:
+			printerr("[shot] %d frames left" % _shot_frames)
 		if _shot_moved:
 			# stand just inside the front door, looking into the house
 			player["pos"] = Vector2(0.0, -9.5)
@@ -371,7 +380,7 @@ func _capture_and_quit() -> void:
 	await RenderingServer.frame_post_draw
 	var img := get_viewport().get_texture().get_image()
 	var err := img.save_png(_shot_path)
-	print("SHOT: saved=", err == OK, " path=", _shot_path, " size=", img.get_size())
+	printerr("SHOT: saved=", err == OK, " path=", _shot_path, " size=", img.get_size())
 	get_tree().quit()
 
 
@@ -400,6 +409,15 @@ func _drain_events() -> void:
 	events.clear()
 
 
+## Speed to play `clip` at so its feet keep up with `actual` metres per second.
+## A clip with no measurable ground travel (an idle) plays at 1.0.
+func _clip_speed(a: Actor, clip: String, actual: float) -> float:
+	var mps := a.clip_mps(clip)
+	if actual <= 0.0 or mps < 0.05:
+		return 1.0
+	return clampf(actual / mps, 0.15, 3.0)
+
+
 func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 	if player_actor == null or player_actor.root == null:
 		return
@@ -417,16 +435,20 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 	# keep the prop pointing where the bullet actually goes
 	player_actor.update_weapon(_aim_dir())
 
-	var speed := 1.0
-	if player["sprinting"]:
-		speed = 1.5
-	elif player["crouching"]:
-		speed = 0.5
+	# Playback speed comes from how fast the clip itself covered ground before its
+	# root motion was stripped (Actor.clip_mps). Playing a 5.6 m/s sprint clip at
+	# speed_scale 1.0 while the body moves 1.3 m/s is what made the feet skate.
 	if player["crouching"]:
 		# real crouch clips now, instead of only squashing the model
-		player_actor.play(Actor.CROUCH_WALK if player_moving else Actor.CROUCH_IDLE, speed)
+		var c := Actor.CROUCH_WALK if player_moving else Actor.CROUCH_IDLE
+		var cs := Sim.PLAYER_CROUCH_SPEED if player_moving else 0.0
+		player_actor.play(c, _clip_speed(player_actor, c, cs))
 	elif player_moving:
-		player_actor.play(Actor.RUN if player["sprinting"] else Actor.WALK, speed)
+		# Both gaits use the run clip. PLAYER_SPEED is 4.2 m/s, which is a jog,
+		# and the walk clip is authored at 1.7 m/s — playing it here would need a
+		# 2.5x cadence. Scaling the run clip keeps the stride length honest.
+		var ms := Sim.PLAYER_SPRINT_SPEED if player["sprinting"] else Sim.PLAYER_SPEED
+		player_actor.play(Actor.RUN, _clip_speed(player_actor, Actor.RUN, ms))
 	else:
 		player_actor.play(Actor.IDLE)
 
@@ -447,10 +469,13 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 		thief_hitbox.collision_layer = LAYER_THIEF
 		var moving: bool = playing and (thief["route"] as Array).size() > 0
 		var sees: bool = playing and Sim.can_see(tp, player["pos"], Sim.THIEF_SIGHT)
-		if thief["carry"] != "":
-			thief_actor.play(Actor.WALK, 0.8)
-		elif moving:
-			thief_actor.play(Actor.RUN, 1.0)
+		if thief["carry"] != "" or moving:
+			# He only ever moves at THIEF_SPEED, so the run clip — authored at
+			# 5.6 m/s — played as a slow-motion sprint on the spot. The walk clip
+			# is the one that matches his actual pace, and using a single clip for
+			# both states also stops the model swapping gait on every grab.
+			thief_actor.play(Actor.WALK,
+				_clip_speed(thief_actor, Actor.WALK, Sim.THIEF_SPEED))
 		elif sees:
 			thief_actor.play(Actor.AIM)
 		else:
@@ -471,7 +496,7 @@ func _update_camera() -> void:
 	var p: Vector2 = player["pos"]
 	var aim := Vector3(sin(yaw) * cos(pitch), -sin(pitch), cos(yaw) * cos(pitch)).normalized()
 	var pivot := Vector3(p.x, eye + 0.30, p.y)
-	var right := Vector3(cos(yaw), 0.0, -sin(yaw))
+	var right := Vector3(-cos(yaw), 0.0, sin(yaw))
 	var desired := pivot - aim * dist + right * 0.72
 
 	# pull in when scenery is between the player and the camera

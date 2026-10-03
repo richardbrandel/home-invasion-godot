@@ -12,6 +12,15 @@ build/
 # GitHub's 100 MB file limit, so it could not be pushed regardless.
 assets/mixamo/
 
+# Agent instructions for this project. Kept LOCAL and never committed: this
+# repository is public, and the file names the first outside playtester.
+AGENTS.md
+
+# Verification screenshots are scratch files. The handful the README links to
+# are already tracked, so this only stops new ones being added by accident.
+shot_*.png
+shot_*.png.import
+
 # Transient editor state
 *.tmp
 *.translation

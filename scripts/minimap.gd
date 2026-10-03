@@ -75,6 +75,14 @@ func _draw() -> void:
 		_rect(w, C_WALL_DIM)
 
 	# ---- lit layer, clipped to what the player can actually see
+	#
+	# KNOWN ISSUE: from some player positions Godot refuses to triangulate this
+	# polygon ("Invalid polygon data, triangulation failed") and the lit floor is
+	# simply not drawn; everything else on the minimap is unaffected. The cause is
+	# the +/-1e-4 rad corner pairs in Sim.visibility_polygon producing zero-area
+	# sliver triangles, which ear-clipping rejects. Deduplicating coincident
+	# points does NOT fix it (tried) — it needs angular decimation, which risks
+	# visibly rounding off corners. Left alone deliberately; see AGENTS.md.
 	if _poly.size() > 2:
 		var pts := PackedVector2Array()
 		for p in _poly:

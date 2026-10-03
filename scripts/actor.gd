@@ -25,6 +25,20 @@ const DEATH := "death"
 
 const CLIP_FILES := [WALK, RUN, CROUCH_IDLE, CROUCH_WALK, AIM, SHOOT, RELOAD, DEATH]
 
+## Clips meant to run forever; everything else is a one-shot that holds its last
+## frame. A Mixamo export sets none of this, so every clip arrived as LOOP_NONE —
+## which is why the walk froze mid-stride after a single cycle.
+const LOOPING := [IDLE, WALK, RUN, CROUCH_IDLE, CROUCH_WALK]
+
+## Where the first gunshot lands inside SHOOT, and how long to stay in the shoot
+## pose. That clip is 2.67 s and holds two shots — the right forearm spikes to
+## 43 deg/step at 0.44 s and again at 2.00 s (measured in test/anim_probe.gd).
+## Seeking past the wind-up makes every trigger pull show the shot itself, and the
+## short window hands the locomotion animation back quickly instead of freezing
+## the legs for the clip's full 2.67 s.
+const SHOOT_SEEK := 0.36
+const ONE_SHOT_WINDOW := 0.42
+
 var root: Node3D
 var anim: AnimationPlayer
 var ground_offset := 0.0
@@ -38,6 +52,7 @@ var _hand_bone := -1
 var _current := ""
 var _one_shot := ""
 var _one_shot_t := 0.0
+var _clip_mps := {}
 
 
 static func _first_anim_player(node: Node) -> AnimationPlayer:
@@ -76,7 +91,11 @@ static func create(dir: String, scale := 1.0) -> Actor:
 				idle_src = String(n)
 				break
 		if idle_src != "" and not a.anim.has_animation(IDLE):
-			a._add_clip(IDLE, a.anim.get_animation(idle_src))
+			# duplicate before normalising: this is the resource as loaded from
+			# disk, and flattening it in place would corrupt the source clip
+			var idle_clip: Animation = a.anim.get_animation(idle_src).duplicate(true)
+			a._normalize_clip(IDLE, idle_clip)
+			a._add_clip(IDLE, idle_clip)
 
 	a._merge(dir)
 	return a
@@ -132,6 +151,7 @@ func _merge(dir: String) -> void:
 				# tracks must address the character we are animating, not the
 				# throwaway instance the clip was loaded from
 				_retarget(copy, inst, root)
+				_normalize_clip(key, copy)
 				if _add_clip(key, copy):
 					merged += 1
 		inst.free()
@@ -147,6 +167,104 @@ func _retarget(clip: Animation, from_root: Node, to_root: Node) -> void:
 		var from_name := String(from_root.name)
 		if from_name != "" and s.begins_with(from_name):
 			clip.track_set_path(i, NodePath(String(to_root.name) + s.substr(from_name.length())))
+
+
+# ----------------------------------------------------- clip normalisation
+## Mixamo exports these clips WITH root motion baked in: the Hips track carries
+## the character's real ground travel, start to finish — walk +1.75 m over
+## 1.033 s, run +3.55 m over 0.633 s (both measured; see test/anim_probe.gd).
+## Godot applies that straight to the skeleton, so the mesh walks away from the
+## node the simulation is moving, and then every clip change or restart snaps it
+## back to the origin, metres at a time. On the thief — who switches clip on
+## every grab, sighting and reroute — that read as "teleports around randomly".
+##
+## So the travel is measured first (it is the clip's authored ground speed, which
+## is worth keeping) and then removed, because the simulation owns position.
+func _normalize_clip(key: String, clip: Animation) -> void:
+	_clip_mps[key] = _measure_root_motion(clip)
+	clip.loop_mode = Animation.LOOP_LINEAR if LOOPING.has(key) else Animation.LOOP_NONE
+	if key == DEATH:
+		# the fall IS the root motion, and nothing has to snap back afterwards
+		return
+	if key == SHOOT or key == AIM:
+		_strip_to_upper_body(clip)
+	else:
+		_flatten_root_travel(clip)
+
+
+func _bone_of(clip: Animation, track: int) -> String:
+	return String(clip.track_get_path(track).get_concatenated_subnames())
+
+
+func _is_root_bone(bone: String) -> bool:
+	var b := bone.to_lower()
+	return b.contains("hips") or b.contains("root")
+
+
+## The hips and everything below them.
+func _is_lower_body(bone: String) -> bool:
+	if _is_root_bone(bone):
+		return true
+	for part in ["UpLeg", "Leg", "Foot", "ToeBase", "Toe_End"]:
+		if bone.ends_with(part):
+			return true
+	return false
+
+
+## Metres of ground the clip covers per second at speed_scale 1.0: the distance
+## between its first and last hips keyframe, over the clip's length.
+func _measure_root_motion(clip: Animation) -> float:
+	if clip.length <= 0.0:
+		return 0.0
+	for i in clip.get_track_count():
+		if not _is_root_bone(_bone_of(clip, i)):
+			continue
+		var v0 = clip.track_get_key_value(i, 0)
+		if not (v0 is Vector3):
+			continue
+		var kc := clip.track_get_key_count(i)
+		if kc < 2:
+			return 0.0
+		var p0: Vector3 = v0
+		var p1: Vector3 = clip.track_get_key_value(i, kc - 1)
+		return (p1 - p0).length() / clip.length
+	return 0.0
+
+
+## Pin the hips' horizontal travel to its first frame. The vertical component is
+## kept deliberately: it is the bob, and the standing height.
+func _flatten_root_travel(clip: Animation) -> void:
+	for i in clip.get_track_count():
+		if not _is_root_bone(_bone_of(clip, i)):
+			continue
+		var v0 = clip.track_get_key_value(i, 0)
+		if not (v0 is Vector3):
+			continue
+		var base: Vector3 = v0
+		for k in clip.track_get_key_count(i):
+			var v: Vector3 = clip.track_get_key_value(i, k)
+			clip.track_set_key_value(i, k, Vector3(base.x, v.y, base.z))
+
+
+## Drop the hips and every leg bone, leaving an upper-body-only overlay. The
+## removed bones keep whatever the locomotion clip last put them in, which is the
+## point: the legs carry on walking while the torso aims and fires.
+##
+## It also removes the turn, which is the part the playtest actually noticed.
+## Both of these clips rotate the hips hard — shoot swivels 87 deg out and back,
+## aim turns 148 deg — so the character span on the spot and the animation fought
+## the yaw the game sets on the root every frame.
+func _strip_to_upper_body(clip: Animation) -> void:
+	# backwards: remove_track shifts every index after the one it drops
+	for i in range(clip.get_track_count() - 1, -1, -1):
+		if _is_lower_body(_bone_of(clip, i)):
+			clip.remove_track(i)
+
+
+## Ground speed the clip was authored at, in metres per second. Play the clip at
+## `actual_speed / clip_mps(key)` and its feet stop skating.
+func clip_mps(key: String) -> float:
+	return float(_clip_mps.get(key, 0.0))
 
 
 func clip_names() -> PackedStringArray:
@@ -174,10 +292,12 @@ func play_once(name: String) -> void:
 	if anim == null or not anim.has_animation(name):
 		return
 	_one_shot = name
-	var a := anim.get_animation(name)
-	_one_shot_t = a.length if a else 0.6
+	_one_shot_t = ONE_SHOT_WINDOW
 	anim.speed_scale = 1.0
 	anim.play(name, 0.08)
+	if name == SHOOT:
+		# skip the wind-up so the trigger pull lands on the shot
+		anim.seek(SHOOT_SEEK)
 
 
 func tick(delta: float) -> void:
