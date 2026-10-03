@@ -95,6 +95,64 @@ func _init() -> void:
 	check("thief does not thrash while heisting", reroutes <= 2,
 		"%d re-routes" % reroutes)
 
+	# ---- solid bodies
+	_banner("solid bodies")
+	var body_gap := Sim.PLAYER_RADIUS + Sim.THIEF_RADIUS
+
+	var sep := Sim.separate_bodies(Vector2(0, 0), Vector2(0.2, 0.1))
+	var s0: Vector2 = sep[0]
+	var s1: Vector2 = sep[1]
+	check("two overlapping bodies are pushed apart",
+		s1.distance_to(s0) >= body_gap - 1e-4,
+		"%.3f m apart, want >= %.3f" % [s1.distance_to(s0), body_gap])
+	check("the homeowner is not shoved while the intruder can still yield",
+		s0.is_equal_approx(Vector2.ZERO), "player moved to %s" % s0)
+
+	var co := Sim.separate_bodies(Vector2(3, 3), Vector2(3, 3))
+	var c0: Vector2 = co[0]
+	var c1: Vector2 = co[1]
+	check("exactly coincident bodies still separate",
+		c1.distance_to(c0) >= body_gap - 1e-4,
+		"%.3f m apart" % c1.distance_to(c0))
+
+	var apart := Sim.separate_bodies(Vector2(0, 0), Vector2(0, 5))
+	check("already-separated bodies are left exactly alone",
+		(apart[0] as Vector2).is_equal_approx(Vector2.ZERO)
+		and (apart[1] as Vector2).is_equal_approx(Vector2(0, 5)))
+
+	var shoved := Sim.separate_bodies(Vector2(0, 0), Vector2(0, 0.3))
+	check("the intruder is the body that yields",
+		(shoved[1] as Vector2).y > 0.3, "thief ended at %s" % shoved[1])
+
+	# ---- steering: solid alone would wall him in
+	var north := -PI * 0.5
+	check("the thief swerves around a homeowner directly ahead",
+		absf(Sim.steer_around(north, Vector2(0, 0), Vector2(0, -1.5)) - north) > 0.1)
+	check("the thief does not swerve for a homeowner behind him",
+		is_equal_approx(Sim.steer_around(north, Vector2(0, 0), Vector2(0, 1.5)), north))
+	check("the thief does not swerve for a distant homeowner",
+		is_equal_approx(Sim.steer_around(north, Vector2(0, 0), Vector2(0, -20.0)), north))
+	check("the swerve turns away from the homeowner, not into him",
+		Sim.steer_around(north, Vector2(0, 0), Vector2(-0.4, -1.5)) > north,
+		"homeowner to the left, heading swung to %.3f" %
+			Sim.steer_around(north, Vector2(0, 0), Vector2(-0.4, -1.5)))
+
+	# ---- the invariant that matters in play: one whole heist, never overlapping
+	player = Sim.create_player()
+	thief = Sim.create_thief()
+	loot = Sim.create_loot()
+	events = []
+	var closest := INF
+	for i in 60 * 180:
+		Sim.step_thief(thief, player, loot, events, dt)
+		events.clear()
+		closest = minf(closest, (thief["pos"] as Vector2).distance_to(player["pos"]))
+		if Sim.remaining(loot) == 0 or not thief["alive"]:
+			break
+	check("the thief never walks through the homeowner across a whole heist",
+		closest >= body_gap - 1e-3,
+		"closest approach %.3f m, want >= %.3f" % [closest, body_gap])
+
 	# ---- thief stays in bounds
 	player = Sim.create_player()
 	thief = Sim.create_thief()

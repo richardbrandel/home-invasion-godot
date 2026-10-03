@@ -126,6 +126,13 @@ const THIEF_RELOAD := 1.5
 const GRAB_RANGE := 1.4
 const DROP_RANGE := 1.6
 
+## The thief starts giving the homeowner a wide berth this far out, and swings
+## this hard when he does. Without it, making the two bodies solid would wall him
+## in: the separation push is straight back along the line of approach, so a
+## dead-on meeting stalls him permanently instead of letting him round the player.
+const AVOID_RANGE := 2.2
+const AVOID_TURN := 0.6
+
 const WEAPONS := {
 	"pistol":  {"name": "Pistol",  "dmg": 26, "cd": 0.24, "mag": 12, "reload": 1.15, "pellets": 1, "spread": 0.02},
 	"shotgun": {"name": "Shotgun", "dmg": 13, "cd": 0.85, "mag": 6,  "reload": 1.60, "pellets": 9, "spread": 0.15},
@@ -299,6 +306,49 @@ static func clamp_to_world(pos: Vector2, radius: float) -> Vector2:
 		clampf(pos.x, BOUNDS.position.x + radius, BOUNDS.end.x - radius),
 		clampf(pos.y, BOUNDS.position.y + radius, BOUNDS.end.y - radius))
 
+## Keep the homeowner and the intruder out of each other, so neither can walk
+## through the other. The intruder yields first — the player's own input is
+## authoritative and being shoved about by the AI reads as broken — and only the
+## overlap he cannot escape, because scenery is behind him, is taken back out of
+## the homeowner. That is what makes a corner feel solid rather than spongy.
+## Returns [player_pos, thief_pos].
+static func separate_bodies(ppos: Vector2, tpos: Vector2) -> Array[Vector2]:
+	var min_dist := PLAYER_RADIUS + THIEF_RADIUS
+	var d := tpos - ppos
+	var dist := d.length()
+	if dist >= min_dist:
+		var clear: Array[Vector2] = [ppos, tpos]
+		return clear
+	# exactly coincident has no direction to work with; pick a fixed axis so the
+	# result is repeatable rather than depending on float noise
+	var n := Vector2(1.0, 0.0) if dist < 1e-5 else d / dist
+
+	var t := clamp_to_world(resolve_circle(ppos + n * min_dist, THIEF_RADIUS), THIEF_RADIUS)
+	var back := t - ppos
+	var back_dist := back.length()
+	if back_dist < min_dist:
+		var bn := n if back_dist < 1e-5 else back / back_dist
+		var p := clamp_to_world(resolve_circle(t - bn * min_dist, PLAYER_RADIUS), PLAYER_RADIUS)
+		var squeezed: Array[Vector2] = [p, t]
+		return squeezed
+	var yielded: Array[Vector2] = [ppos, t]
+	return yielded
+
+## Swing a heading away from the homeowner when he is close and in front. Ties —
+## walking straight at him — break to a fixed side, so the thief is predictable
+## instead of jittering left and right.
+static func steer_around(a: float, from: Vector2, ppos: Vector2) -> float:
+	var to_p := ppos - from
+	var gap := to_p.length()
+	if gap > AVOID_RANGE or gap < 1e-5:
+		return a
+	var fwd := Vector2(cos(a), sin(a))
+	var dir := to_p / gap
+	if fwd.dot(dir) <= 0.0:
+		return a                       # he is behind; nothing to avoid
+	var side := fwd.cross(dir)
+	return a - AVOID_TURN if side > 0.0 else a + AVOID_TURN
+
 # ------------------------------------------------------------------- pathing
 static func nearest_node(p: Vector2) -> String:
 	var best := "frontHub"
@@ -435,11 +485,19 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 			route.pop_front()
 			continue
 		var a := (wp - tpos).angle()
+		a = steer_around(a, tpos, ppos)
 		tpos += Vector2(cos(a), sin(a)) * THIEF_SPEED * speed_scale * dt
 		tpos = resolve_circle(tpos, THIEF_RADIUS)
 		tpos = clamp_to_world(tpos, THIEF_RADIUS)
 		thief["yaw"] = a
 		break
+
+	# ---- solid bodies: neither may stand inside the other. Applied here, once
+	# both have moved — the homeowner's step is taken by the caller before this.
+	var pair := separate_bodies(ppos, tpos)
+	ppos = pair[0]
+	tpos = pair[1]
+	player["pos"] = ppos
 	thief["pos"] = tpos
 
 	# ---- stuck detection: re-route rather than stand still forever
