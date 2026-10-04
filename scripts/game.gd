@@ -54,6 +54,8 @@ var _tracers: Array = []
 var _shot_frames := -1
 var _shot_path := "res://shot.png"
 var _shot_moved := false
+var _shot_yaw := INF
+var _shot_pitch := INF
 
 
 func _ready() -> void:
@@ -79,6 +81,12 @@ func _ready() -> void:
 			_shot_frames = 140
 		if a == "--shot-moved":
 			_shot_moved = true
+		# aim control, so a screenshot can be pointed at a chosen background:
+		# verifying a HUD change against the right backdrop otherwise means guessing
+		if a.begins_with("--shot-yaw="):
+			_shot_yaw = float(a.substr(11))
+		if a.begins_with("--shot-pitch="):
+			_shot_pitch = float(a.substr(13))
 
 
 # ------------------------------------------------------------- environment
@@ -372,6 +380,10 @@ func _process(delta: float) -> void:
 			player["pos"] = Vector2(0.0, -9.5)
 			yaw = PI
 			pitch = 0.03
+		if _shot_yaw != INF:
+			yaw = deg_to_rad(_shot_yaw)
+		if _shot_pitch != INF:
+			pitch = deg_to_rad(_shot_pitch)
 		if _shot_frames == 0:
 			_capture_and_quit()
 
@@ -616,17 +628,31 @@ func _build_hud() -> void:
 	minimap.position = Vector2(1600 - 250 - 16, 900 - 210 - 16)
 	layer.add_child(minimap)
 
-	# crosshair
-	var cross := ColorRect.new()
-	cross.color = Color(1, 1, 1, 0.85)
-	cross.position = Vector2(800 - 1, 450 - 9)
-	cross.size = Vector2(2, 18)
-	layer.add_child(cross)
-	var cross2 := ColorRect.new()
-	cross2.color = Color(1, 1, 1, 0.85)
-	cross2.position = Vector2(800 - 9, 450 - 1)
-	cross2.size = Vector2(18, 2)
-	layer.add_child(cross2)
+	# Crosshair. This used to be two bare 2-pixel white ColorRects, which is why it
+	# seemed to be "only sometimes there": against the lit cream walls it was white
+	# on white, and a 2-pixel line also aliases away whenever the window is scaled
+	# below the 1600x900 reference, so it flickered in and out with head movement.
+	# Every arm is now a white core over a black outline, with a centre dot, so it
+	# reads against any background at any scale.
+	var cx := 800.0
+	var cy := 450.0
+	var half := 11.0          # arm length out from the centre
+	var thick := 2.0          # core thickness
+	var edge := 1.0           # outline thickness on each side
+	var core := Color(1.0, 1.0, 1.0, 0.95)
+	var rim := Color(0.0, 0.0, 0.0, 0.65)
+	var dot := Rect2(cx - 1.5, cy - 1.5, 3.0, 3.0)
+	var arms: Array[Rect2] = [
+		Rect2(cx - thick * 0.5, cy - half, thick, half * 2.0),    # vertical
+		Rect2(cx - half, cy - thick * 0.5, half * 2.0, thick),    # horizontal
+	]
+	# every outline first, so no core is ever covered by a neighbouring outline
+	for a in arms:
+		_add_hud_rect(layer, a.grow(edge), rim)
+	_add_hud_rect(layer, dot.grow(edge), rim)
+	for a in arms:
+		_add_hud_rect(layer, a, core)
+	_add_hud_rect(layer, dot, core)
 
 	_overlay = Panel.new()
 	_overlay.position = Vector2(0, 0)
@@ -651,6 +677,16 @@ func _make_hud_click_through(layer: CanvasLayer) -> void:
 	for c in layer.get_children():
 		if c is Control:
 			(c as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+
+## One flat rectangle of HUD. Used to build the crosshair, whose arms and centre dot
+## each need an outline drawn behind a core.
+func _add_hud_rect(layer: CanvasLayer, r: Rect2, col: Color) -> void:
+	var c := ColorRect.new()
+	c.color = col
+	c.position = r.position
+	c.size = r.size
+	layer.add_child(c)
 
 
 func _mk_label(parent: Node, pos: Vector2, size: int, col: Color) -> Label:
