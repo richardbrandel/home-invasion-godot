@@ -73,6 +73,7 @@ var _bag: MeshInstance3D
 var _gloves: Array[MeshInstance3D] = []
 var _kit_bones := {}
 var carry_pose: SkeletonModifier3D
+var grip_pose: SkeletonModifier3D
 var _skeleton: Skeleton3D = null
 var _hand_bone := -1
 var _current := ""
@@ -509,6 +510,32 @@ func attach_carry_pose() -> void:
 func set_carry(amount: float) -> void:
 	if carry_pose != null:
 		carry_pose.weight = clampf(amount, 0.0, 1.0)
+
+
+## Curl the trigger hand's fingers so it grips whatever it is holding.
+##
+## The axis and sign are MEASURED by test/probe_grip.gd, which sweeps all six candidates and
+## reports which one brings the fingertips toward the palm: X, sign +1, taking the mean
+## fingertip-to-palm distance from 0.1836 m at rest to 0.1593 m closed.
+func attach_grip_pose() -> void:
+	if _skeleton == null:
+		return
+	var script := load("res://scripts/grip_pose.gd")
+	if script == null:
+		push_warning("Actor: missing grip_pose.gd")
+		return
+	grip_pose = script.new() as SkeletonModifier3D
+	grip_pose.name = "GripPose"
+	grip_pose.set("axis", 0)
+	grip_pose.set("axis_sign", 1.0)
+	grip_pose.set("hand", "Right")
+	_skeleton.add_child(grip_pose)
+
+
+## 0 = fingers as the animation leaves them, 1 = closed on a grip.
+func set_grip(amount: float) -> void:
+	if grip_pose != null:
+		grip_pose.weight = clampf(amount, 0.0, 1.0)
 
 
 func attach_kit() -> void:
