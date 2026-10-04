@@ -48,6 +48,7 @@ var _overlay: Panel
 var _ov_title: Label
 var _ov_sub: Label
 var _tracers: Array = []
+var _loot_nodes: Array = []
 
 # Debug: `godot --path . -- --shot` renders 120 frames, writes shot.png next to
 # the project and quits. Lets the build be verified visually without a human.
@@ -56,6 +57,8 @@ var _shot_path := "res://shot.png"
 var _shot_moved := false
 var _shot_yaw := INF
 var _shot_pitch := INF
+var _shot_after := 0.0
+var _shot_wait := 0.0
 
 
 func _ready() -> void:
@@ -65,6 +68,7 @@ func _ready() -> void:
 	_spawn_actors()
 	_build_hud()
 	reset()
+	_build_loot()
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
 	var args := OS.get_cmdline_user_args()
@@ -87,6 +91,11 @@ func _ready() -> void:
 			_shot_yaw = float(a.substr(11))
 		if a.begins_with("--shot-pitch="):
 			_shot_pitch = float(a.substr(13))
+		# let the round run this many seconds first, so mid-game states (an intruder
+		# actually carrying something, a delivery pile) can be captured at all
+		if a.begins_with("--shot-after="):
+			_shot_after = float(a.substr(13))
+			_shot_wait = _shot_after
 
 
 # ------------------------------------------------------------- environment
@@ -251,6 +260,58 @@ func _spawn_actors() -> void:
 	add_child(thief_hitbox)
 
 
+# ---------------------------------------------------------------------- loot
+## A visible object per valuable, so the theft can actually be read.
+##
+## There never was one: the only cues that the intruder had taken something were
+## the HUD counter, a greyed dot on the minimap, and — until the gaits were unified
+## to fix foot-skating — the fact that a laden intruder walked where a hunting one
+## ran. With that gone he simply left the house looking empty handed.
+##
+## Each item now sits on the floor where it belongs, rides on the intruder's chest
+## while he carries it, and lands in a pile where he handed it over. Same approach
+## as the weapon props: positioned from the actor's transform each frame rather than
+## reparented, which avoids the BoneAttachment3D trap documented in AGENTS.md.
+func _build_loot() -> void:
+	for l in loot:
+		var m := MeshInstance3D.new()
+		var b := BoxMesh.new()
+		b.size = Vector3(0.36, 0.30, 0.26)
+		m.mesh = b
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(0.95, 0.73, 0.26)
+		mat.roughness = 0.45
+		# a little self-illumination so it still reads in the dim interior
+		mat.emission_enabled = true
+		mat.emission = Color(0.40, 0.26, 0.06)
+		m.material_override = mat
+		add_child(m)
+		_loot_nodes.append(m)
+
+
+func _update_loot() -> void:
+	for i in _loot_nodes.size():
+		var m: MeshInstance3D = _loot_nodes[i]
+		var l: Dictionary = loot[i]
+		if l["delivered"]:
+			# pile them where they were handed over, so you can see what he got
+			m.visible = true
+			m.position = Vector3(Sim.DROP.x - 0.55 + 0.55 * float(i), 0.17, Sim.DROP.y)
+			m.rotation.y = 0.5 * float(i)
+		elif l["taken"]:
+			# carried: ride on his chest, facing the way he faces
+			var ok := thief_actor != null and thief_actor.root != null
+			m.visible = ok
+			if ok:
+				var r: Transform3D = thief_actor.root.global_transform
+				m.global_position = r.origin + Vector3(0, 1.02, 0) + r.basis.z * 0.26
+				m.global_rotation = Vector3(0, thief_actor.root.rotation.y, 0)
+		else:
+			m.visible = true
+			m.position = Vector3((l["pos"] as Vector2).x, 0.17, (l["pos"] as Vector2).y)
+			m.rotation.y = 0.0
+
+
 # -------------------------------------------------------------------- state
 func reset() -> void:
 	player = Sim.create_player()
@@ -359,6 +420,7 @@ func _process(delta: float) -> void:
 		_drain_events()
 
 	_update_actors(delta, playing, player_moving)
+	_update_loot()
 	_update_camera()
 	_update_tracers(delta)
 	_draw_minimap()
@@ -368,7 +430,9 @@ func _process(delta: float) -> void:
 	_lbl_banner.text = msg if msg_t > 0.0 else ""
 	_refresh_hud()
 
-	if _shot_frames > 0:
+	if _shot_frames > 0 and _shot_wait > 0.0:
+		_shot_wait = maxf(0.0, _shot_wait - delta)
+	elif _shot_frames > 0:
 		_shot_frames -= 1
 		# stderr on purpose: print() is block-buffered when redirected, so a run
 		# that has to be killed loses every stdout line and looks like a hang
