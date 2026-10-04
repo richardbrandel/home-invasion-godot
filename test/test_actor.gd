@@ -92,9 +92,20 @@ func _init() -> void:
 
 	# ---------------------------------------------------------------- inventory
 	_banner("clip inventory")
-	check("the mesh clip plus all eight animation clips merged",
-		a.merged == 8 and a.has_clip(Actor.IDLE),
-		"merged=%d clips=%s" % [a.merged, a.clip_names()])
+	# Counted rather than hard-coded. It was 8 and became 11 when the carry, shove and hit
+	# clips landed — and the homeowner's folder deliberately holds only some of CLIP_FILES,
+	# because he neither carries nor searches. Asserting the exact expected SET means a
+	# missing or mis-named file fails here instead of silently playing nothing.
+	var want := [Actor.WALK, Actor.RUN, Actor.CROUCH_IDLE, Actor.CROUCH_WALK, Actor.AIM,
+		Actor.SHOOT, Actor.RELOAD, Actor.DEATH, Actor.PUSH, Actor.SHOVE_REACT,
+		Actor.HIT_REACT]
+	var missing: Array = []
+	for k in want:
+		if not a.has_clip(k):
+			missing.append(k)
+	check("the mesh clip plus every animation clip the homeowner needs merged",
+		missing.is_empty() and a.merged == want.size() and a.has_clip(Actor.IDLE),
+		"merged=%d want=%d missing=%s" % [a.merged, want.size(), missing])
 
 	# --------------------------------------------------------------- loop modes
 	_banner("looping")

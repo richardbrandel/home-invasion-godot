@@ -910,6 +910,21 @@ func _process(delta: float) -> void:
 	if _shot_fire:
 		# takes effect next frame: _fire() is driven earlier in _process
 		fire_held = true
+	# `--dbg-hold` freezes the intruder so a pose can be photographed up close. It exists
+	# for the same reason `--shot-walk` and `--shot-shove` do: a capture has no keyboard and
+	# no game state, so anything that only happens mid-round is otherwise unphotographable.
+	# The relocation is NOT cosmetic — his spawn point is inside DROP_RANGE of the van, so a
+	# held intruder delivers on the first frame and there is nothing left to photograph. I
+	# measured a delivered TV sitting on the ground twice before spotting that.
+	if OS.get_cmdline_user_args().has("--dbg-hold"):
+		thief["route"] = []
+		thief["think"] = 0.0
+		thief["stagger"] = 0.0
+		# and stand him in the dining room, because his spawn IS the drop point: held at
+		# spawn he delivers on the first frame and there is nothing left to photograph
+		thief["pos"] = Vector2(1.0, -11.6)
+		thief["prev"] = Vector2(1.0, -11.6)
+		thief["yaw"] = 0.4
 	if _shot_carry != "":
 		thief["carry"] = _shot_carry
 		for l in loot:
@@ -992,12 +1007,19 @@ func _drain_events() -> void:
 			"grabbed":
 				msg = "They grabbed the %s!" % ev["label"]
 				msg_t = 1.8
+				# a reach, not a teleport. 3.43 s clip; the window is the stoop only.
+				if thief_actor != null and thief_actor.has_clip(Actor.PICKUP):
+					thief_actor.play_for(Actor.PICKUP, 1.3)
 			"thiefHit":
 				# sim.gd has always emitted this and game.gd has never read it, so
 				# shooting a man produced no feedback at all beyond a HUD counter.
 				_play_at("impact", Vector3(thief["pos"].x, 1.15, thief["pos"].y), -2.0)
+				if thief_actor != null and thief_actor.has_clip(Actor.HIT_REACT):
+					thief_actor.play_once(Actor.HIT_REACT)
 			"playerHit":
 				_play_at("impact", Vector3(player["pos"].x, 1.15, player["pos"].y), 0.0)
+				if player_actor != null and player_actor.has_clip(Actor.HIT_REACT):
+					player_actor.play_once(Actor.HIT_REACT)
 			"delivered":
 				msg = "They got the %s!" % ev["label"]
 				msg_t = 2.0
@@ -1009,6 +1031,8 @@ func _drain_events() -> void:
 			"thiefShove":
 				# He is on you. This is the one moment the game should feel like a fight
 				# rather than a duel, so it shoves the view as well as the message.
+				if thief_actor != null and thief_actor.has_clip(Actor.PUSH):
+					thief_actor.play_once(Actor.PUSH)
 				msg = "He shoved you off!"
 				msg_t = 1.4
 				pitch = clampf(pitch + 0.10, PITCH_MIN, PITCH_MAX)
@@ -1017,6 +1041,11 @@ func _drain_events() -> void:
 			"shoved":
 				# This is the moment the game most needed a sentence: you have just done
 				# something the HUD has never had a word for.
+				# YOU are the one shoving here, and he is the one going back.
+				if player_actor != null and player_actor.has_clip(Actor.PUSH):
+					player_actor.play_once(Actor.PUSH)
+				if thief_actor != null and thief_actor.has_clip(Actor.SHOVE_REACT):
+					thief_actor.play_for(Actor.SHOVE_REACT, 0.8)
 				if String(ev["dropped"]) != "":
 					msg = "You knocked the %s out of his hands!" % ev["dropped"]
 					msg_t = 2.2
@@ -1131,8 +1160,12 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 	thief_actor.update_weapon(_thief_aim(tp, sees))
 	# after update_weapon, because the kit follows bones the animation has just written
 	thief_actor.update_kit()
-	# the carry pose is a MESH concern only: the sim does not know or care how his arms look
-	thief_actor.set_carry(1.0 if thief.get("carry", "") != "" else 0.0)
+	var laden: bool = thief.get("carry", "") != ""
+	# The hand-built carry pose is now the FALLBACK, not the mechanism. A real clip holds the
+	# load properly; the pose exists only so a fresh clone with no Mixamo assets still puts
+	# his arms somewhere sensible. Both at once would double-compensate.
+	var use_pose: bool = laden and not thief_actor.has_clip(Actor.CARRY_WALK)
+	thief_actor.set_carry(1.0 if use_pose else 0.0)
 
 	if not thief["alive"]:
 		if thief_actor.has_clip(Actor.DEATH):
@@ -1141,7 +1174,23 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 	else:
 		thief_hitbox.collision_layer = LAYER_THIEF
 		var moving: bool = playing and (thief["route"] as Array).size() > 0
-		if thief["carry"] != "" or moving:
+		if laden and thief_actor.has_clip(Actor.CARRY_WALK):
+			# He carries in both hands now, and walks differently while laden.
+			if moving:
+				var cc := Actor.CARRY_WALK
+				thief_actor.play(cc, _clip_speed(thief_actor, cc, Sim.THIEF_SPEED))
+			else:
+				thief_actor.play(Actor.CARRY_IDLE)
+		elif float(thief.get("think", 0.0)) > 0.0 and thief_actor.has_clip(Actor.LOOK_AROUND):
+			# The search dwell, which used to be a man standing perfectly still for 1.5 s
+			# and calling it looking around. `think` also covers the 2 s pause at the
+			# threshold before he commits, which the same clip suits.
+			#
+			# THIS BRANCH MUST COME BEFORE `moving`. The sim skips his move loop while
+			# `think` is running, but his ROUTE is already non-empty, so testing `moving`
+			# first played the search for exactly one frame and then walked off mid-look.
+			thief_actor.play(Actor.LOOK_AROUND)
+		elif laden or moving:
 			# He only ever moves at THIEF_SPEED, so the run clip — authored at
 			# 5.6 m/s — played as a slow-motion sprint on the spot. The walk clip
 			# is the one that matches his actual pace, and using a single clip for

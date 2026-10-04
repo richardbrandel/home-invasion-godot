@@ -22,13 +22,25 @@ const AIM := "aim"
 const SHOOT := "shoot"
 const RELOAD := "reload"
 const DEATH := "death"
+## Fetched 2026-10-04 and wired in afterwards. Each of these replaces a stand-in:
+## the hand-built carry pose, a stand-still for the search dwell, the shoot clip for both
+## shoves, and nothing at all for a hit reaction or a grab.
+const CARRY_WALK := "carry_walk"
+const CARRY_IDLE := "carry_idle"
+const PICKUP := "pickup"
+const LOOK_AROUND := "look_around"
+const PUSH := "push"
+const SHOVE_REACT := "shove_react"
+const HIT_REACT := "hit_react"
 
-const CLIP_FILES := [WALK, RUN, CROUCH_IDLE, CROUCH_WALK, AIM, SHOOT, RELOAD, DEATH]
+const CLIP_FILES := [WALK, RUN, CROUCH_IDLE, CROUCH_WALK, AIM, SHOOT, RELOAD, DEATH,
+	CARRY_WALK, CARRY_IDLE, PICKUP, LOOK_AROUND, PUSH, SHOVE_REACT, HIT_REACT]
 
 ## Clips meant to run forever; everything else is a one-shot that holds its last
 ## frame. A Mixamo export sets none of this, so every clip arrived as LOOP_NONE —
 ## which is why the walk froze mid-stride after a single cycle.
-const LOOPING := [IDLE, WALK, RUN, CROUCH_IDLE, CROUCH_WALK]
+const LOOPING := [IDLE, WALK, RUN, CROUCH_IDLE, CROUCH_WALK,
+	CARRY_WALK, CARRY_IDLE, LOOK_AROUND]
 
 ## Where the first gunshot lands inside SHOOT, and how long to stay in the shoot
 ## pose. That clip is 2.67 s and holds two shots — the right forearm spikes to
@@ -38,6 +50,14 @@ const LOOPING := [IDLE, WALK, RUN, CROUCH_IDLE, CROUCH_WALK]
 ## the legs for the clip's full 2.67 s.
 const SHOOT_SEEK := 0.36
 const ONE_SHOT_WINDOW := 0.42
+
+## PUSH is 8.00 s and only about a quarter of a second of it is the thrust. Measured from
+## its keyframes: the right forearm spikes to 496 deg/s across t = 0.33-0.43 s, with a
+## second, identical push at 7.33 s. It is a repeated shove cycle, so play one of them.
+## Judged by length alone this clip looks like a crate-pushing loop and I nearly discarded
+## it — it is the strongest thrust of every candidate measured.
+const PUSH_SEEK := 0.30
+const PUSH_WINDOW := 0.34
 
 var root: Node3D
 var anim: AnimationPlayer
@@ -317,6 +337,10 @@ func play_once(name: String) -> void:
 	if name == SHOOT:
 		# skip the wind-up so the trigger pull lands on the shot
 		anim.seek(SHOOT_SEEK)
+	elif name == PUSH:
+		# same trick: seek into the thrust and hand the locomotion back quickly
+		anim.seek(PUSH_SEEK)
+		_one_shot_t = PUSH_WINDOW
 
 
 func tick(delta: float) -> void:
