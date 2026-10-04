@@ -478,6 +478,44 @@ func _init() -> void:
 		(thief["searched"] as Array).count("kitchen") == 1,
 		"kitchen appears %d times" % (thief["searched"] as Array).count("kitchen"))
 
+	# ---- the clock, which a gunshot starts and nothing else does
+	_banner("the police clock")
+	player = Sim.create_player()
+	thief = Sim.create_thief()
+	loot = Sim.create_loot()
+	thief["think"] = 0.0
+	check("no clock runs before anybody shoots",
+		float(thief["alarm"]) < 0.0, "alarm=%.1f" % thief["alarm"])
+	events = []
+	for n in 180:
+		Sim.step_thief(thief, player, loot, events, dt)
+	check("and a quiet round never starts one", float(thief["alarm"]) < 0.0,
+		"alarm=%.1f after 3 s of a silent burglary" % thief["alarm"])
+
+	# a single shot is enough to make somebody call
+	Sim.alert_thief(thief, Vector2(0.0, -11.0), 0.2)
+	check("one gunshot starts the clock", float(thief["alarm"]) >= 0.0,
+		"alarm=%.2f" % thief["alarm"])
+
+	# hold fear down, so ONLY the clock can end it, and run past the expected arrival
+	events = []
+	var n2 := 0
+	var limit := int((Sim.POLICE_TIME + 5.0) / dt)
+	while n2 < limit and not bool(thief["sirens"]):
+		thief["fear"] = 0.0
+		Sim.step_thief(thief, player, loot, events, dt)
+		n2 += 1
+	check("the sirens arrive on schedule", bool(thief["sirens"]),
+		"at %.1f s, expected %.0f s" % [n2 * dt, Sim.POLICE_TIME])
+	var heard := false
+	for ev3 in events:
+		if ev3["type"] == "sirens":
+			heard = true
+	check("and the round is told, so it can react", heard, "sirens event raised")
+	check("and the sirens are what finally drives him off",
+		float(thief["fear"]) >= Sim.FEAR_FLEE,
+		"fear=%.1f, threshold=%.1f" % [thief["fear"], Sim.FEAR_FLEE])
+
 	# ---- thief stays in bounds
 	player = Sim.create_player()
 	thief = Sim.create_thief()

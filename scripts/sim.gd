@@ -162,6 +162,15 @@ const FEAR_PER_HIT := 2.0
 const SEARCH_NODES := ["living", "kitchen", "bedroom", "study"]
 const SEARCH_TIME := 1.5      # seconds spent looking around a room
 const SEARCH_RANGE := 1.2     # how close he has to be to search it
+## The clock, and it does NOT start on its own. A home invasion is ended by somebody calling
+## the police, and the thing that makes somebody call is a GUNSHOT — so the alarm starts on
+## the first shot and not before. A quiet homeowner who never fires never starts the clock.
+##
+## When it runs out he hears sirens and leaves, whether or not he has finished. That is a
+## real tactical consequence for firing: you can cut the robbery short, but you cannot use
+## the threat of police to win, because they take him away rather than stopping him. He
+## simply gets away with less.
+const POLICE_TIME := 110.0
 
 
 ## Tell him he is being shot at. Called by the game when the homeowner fires; `loudness`
@@ -172,6 +181,8 @@ static func alert_thief(thief: Dictionary, from: Vector2, loudness := 1.0) -> vo
 		return
 	thief["last_seen"] = from
 	thief["fear"] = minf(float(thief.get("fear", 0.0)) + FEAR_PER_SHOT * loudness, 8.0)
+	if float(thief.get("alarm", -1.0)) < 0.0:
+		thief["alarm"] = 0.0
 const THIEF_FIRE_HUNTING := 1.35
 const THIEF_MAG := 8
 const THIEF_RELOAD := 1.5
@@ -512,7 +523,7 @@ static func create_thief() -> Dictionary:
 		"carry": "", "target": "", "route": [], "mode": "hunt",
 		"stuck_t": 0.0, "aim": 0.0, "stagger": 0.0, "hits": 0,
 		"fear": 0.0, "escaped": false, "last_seen": Vector2.ZERO, "speed": 0.0,
-		"searched": [],
+		"searched": [], "alarm": -1.0, "sirens": false,
 	}
 
 static func create_loot() -> Array[Dictionary]:
@@ -548,6 +559,16 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 	# fear settles when nothing is happening. It does not un-decide a decision already
 	# taken, which is why `mode == "flee"` below is sticky.
 	thief["fear"] = maxf(0.0, float(thief["fear"]) - FEAR_DECAY * dt)
+
+	# the clock runs only once somebody has been called
+	if float(thief["alarm"]) >= 0.0:
+		thief["alarm"] = float(thief["alarm"]) + dt
+		if float(thief["alarm"]) >= POLICE_TIME:
+			if not bool(thief["sirens"]):
+				thief["sirens"] = true
+				events.append({"type": "sirens"})
+			# he drops everything and runs, exactly as if he had been shot at
+			thief["fear"] = maxf(float(thief["fear"]), FEAR_FLEE)
 
 	# ---- decide
 	#

@@ -132,6 +132,9 @@ var _mark_i := 0
 var _mark_mat: StandardMaterial3D
 var _flash: MeshInstance3D
 var _flash_t := 0.0
+## The police, who arrive from the street because a gunshot is what makes somebody call.
+var _siren: AudioStreamPlayer3D
+var _siren_t := 0.0
 ## Set when he breaks off and runs, so the loss text can say how much he got away with
 ## rather than claiming he took everything.
 var _ran_off := false
@@ -617,6 +620,9 @@ func reset() -> void:
 	loot = Sim.create_loot()
 	events = []
 	state = "play"
+	if _siren != null:
+		_siren.stop()
+		_siren_t = 0.0
 	_ran_off = false
 	_escaped_with = 0
 	msg = "DEFEND YOUR HOME"
@@ -810,6 +816,10 @@ func _process(delta: float) -> void:
 		_flash_t -= delta
 		if _flash_t <= 0.0:
 			_flash.visible = false
+	if _siren != null and _siren_t > 0.0:
+		_siren_t -= delta
+		if _siren_t <= 0.0:
+			_siren.stop()
 	_draw_minimap()
 
 	if msg_t > 0.0:
@@ -918,6 +928,12 @@ func _drain_events() -> void:
 				_ran_off = false
 				state = "lose"
 				_show_overlay(false)
+			"sirens":
+				# Not a win and not a loss: they take him away rather than stopping him,
+				# so what he is holding goes with him.
+				msg = "SIRENS \u2014 he is running for the van"
+				msg_t = 4.0
+				_start_siren()
 			"escaped":
 				# He broke off and ran. A partial loss is a different outcome from losing
 				# everything, and the text has to say which one happened.
@@ -1308,7 +1324,7 @@ func _make_hud_click_through(layer: CanvasLayer) -> void:
 # ------------------------------------------------------------------------ audio
 func _build_audio() -> void:
 	for name in ["gunshot_pistol", "gunshot_shotgun", "footstep", "impact",
-			"door", "van_idle"]:
+			"door", "van_idle", "siren"]:
 		var p := "res://assets/audio/%s.wav" % name
 		if ResourceLoader.exists(p):
 			_sfx[name] = load(p)
@@ -1436,6 +1452,28 @@ func _build_effects() -> void:
 	_flash.material_override = m
 	_flash.visible = false
 	add_child(_flash)
+
+
+## The police, heard from the street rather than on top of you.
+func _start_siren() -> void:
+	var st = _sfx.get("siren")
+	if st == null or _siren != null:
+		return
+	_siren = AudioStreamPlayer3D.new()
+	_siren.stream = st
+	_siren.global_position = Vector3(0.0, 1.5, 20.0)
+	_siren.max_distance = 90.0
+	_siren.unit_size = 30.0
+	_siren.volume_db = -4.0
+	if st is AudioStreamWAV:
+		var w := st as AudioStreamWAV
+		w.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		# loop_mode alone leaves an EMPTY loop region and the stream plays nothing
+		w.loop_begin = 0
+		w.loop_end = int(w.get_length() * float(w.mix_rate))
+	add_child(_siren)
+	_siren.play()
+	_siren_t = 10.0
 
 
 func _add_impact(pos: Vector3, normal: Vector3, big: bool, on_flesh: bool) -> void:
@@ -1567,6 +1605,9 @@ func _refresh_hud() -> void:
 		tstate = "zone=%s x%.2f " % [_last_zone, _last_mult] + tstate
 	_lbl_stance.text = "%s    intruder: %s" % [stance, tstate]
 	_lbl_loot.text = "LOOT STOLEN  %d / 3" % (3 - Sim.remaining(loot))
+	if float(thief["alarm"]) >= 0.0:
+		var left := maxf(0.0, Sim.POLICE_TIME - float(thief["alarm"]))
+		_lbl_loot.text += "     POLICE  %d:%02d" % [int(left) / 60, int(left) % 60]
 
 
 func _draw_minimap() -> void:

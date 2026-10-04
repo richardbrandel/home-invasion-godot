@@ -132,6 +132,31 @@ def van(seconds=3.0, seed=31) -> list:
     return out
 
 
+
+def siren(dur=3.0, lo=620.0, hi=1180.0, wail=1.4, seed=7) -> list:
+    """A two-tone wail: the sound that ends the round if you start shooting.
+
+    Distance does the rest of the work — it is played through an AudioStreamPlayer3D out on
+    the street, so it arrives from where the police actually are rather than on top of you.
+    """
+    rnd = random.Random(seed)
+    n = int(SR * dur)
+    out = []
+    phase = 0.0
+    for i in range(n):
+        t = i / SR
+        # a slow triangle sweep between two pitches
+        w = 0.5 - 0.5 * math.cos(2.0 * math.pi * t / wail)
+        f = lo + (hi - lo) * w
+        phase += 2.0 * math.pi * f / SR
+        v = math.sin(phase) + 0.35 * math.sin(phase * 2.0)
+        # a horn is not a pure tone; a little noise makes it read as a speaker
+        v += 0.06 * rnd.uniform(-1.0, 1.0)
+        env = min(1.0, t / 0.12) * min(1.0, (dur - t) / 0.35)
+        out.append(v * env * 0.42)
+    return out
+
+
 def main() -> None:
     print("writing assets/audio/")
     write("gunshot_pistol", gunshot(dur=0.36, crack=58.0, body=110.0, body_decay=18.0,
@@ -145,6 +170,7 @@ def main() -> None:
     write("impact", impact())
     write("door", door())
     write("van_idle", van())
+    write("siren", siren())
     print("done — these are synthesised, not recorded, and are deliberately short")
 
 
