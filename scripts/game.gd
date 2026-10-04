@@ -37,6 +37,32 @@ var msg := ""
 var msg_t := 0.0
 var fire_held := false
 
+# ------------------------------------------------------------------ aim scheme
+#
+# `yaw`/`pitch` are the BODY: they orient the view, and movement is relative to them.
+# `aim_yaw`/`aim_pitch` are an offset from the body, and the gun and the bullets follow
+# that. With aim_cone false the offset is forced to zero and the two are the same thing,
+# which is the ordinary first-person behaviour.
+#
+# In cone mode the mouse moves the aim within a cone in front of you and the view holds
+# still, so the crosshair and the gun visibly travel across the screen. Push the aim to
+# the edge of the cone and the body turns to follow it; walking also turns the body
+# toward wherever you are aiming, so the view catches up on its own.
+#
+# Toggle at runtime with T. Richard asked for this as an experiment, explicitly to be
+# reverted to plain first person if he does not like it, so both paths stay live.
+const CONE_YAW := 0.61          # ~35 degrees either side
+const CONE_PITCH := 0.38        # ~22 degrees up and down
+const CONE_RECENTRE := 3.2      # rad/s the body turns toward the aim while walking
+const AIM_SENS_X := 0.0022
+const AIM_SENS_Y := 0.0018
+const PITCH_MIN := -0.30        # looking up
+const PITCH_MAX := 0.85         # looking down
+
+var aim_cone := true
+var aim_yaw := 0.0
+var aim_pitch := 0.0
+
 var _lbl_hp: Label
 var _lbl_weapon: Label
 var _lbl_ammo: Label
@@ -49,6 +75,7 @@ var _ov_title: Label
 var _ov_sub: Label
 var _tracers: Array = []
 var _loot_nodes: Array = []
+var _crosshair: Control
 
 # Debug: `godot --path . -- --shot` renders 120 frames, writes shot.png next to
 # the project and quits. Lets the build be verified visually without a human.
@@ -61,6 +88,10 @@ var _shot_after := 0.0
 var _shot_wait := 0.0
 var _shot_pos := Vector2(INF, INF)
 var _shot_hide_player := false
+## Hold an aim offset for screenshots. Cone mode only moves the crosshair in response to
+## mouse motion, and a screenshot has no mouse, so without this the cone state cannot be
+## photographed at all.
+var _shot_aim := 0.0
 
 
 func _ready() -> void:
@@ -108,6 +139,11 @@ func _ready() -> void:
 		# front of him — which is exactly what a prop inspection wants to see
 		if a == "--shot-hide-player":
 			_shot_hide_player = true
+		if a.begins_with("--shot-aim="):
+			_shot_aim = float(a.substr(11))
+		# force the fallback scheme, so "does reverting still work" is checkable
+		if a == "--aim=fixed":
+			aim_cone = false
 
 
 # ------------------------------------------------------------- environment
@@ -413,6 +449,10 @@ func reset() -> void:
 	msg_t = 2.4
 	yaw = 0.0
 	pitch = 0.03
+	# clear the aim offset, but deliberately leave aim_cone alone: the round restarts
+	# without silently flipping the scheme the player just chose with T
+	aim_yaw = 0.0
+	aim_pitch = 0.0
 	fire_held = false
 	_overlay.visible = false
 	_refresh_hud()
@@ -425,8 +465,27 @@ func reset() -> void:
 ## so every shot was being eaten by the crosshair.
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
-		yaw -= event.relative.x * 0.0022
-		pitch = clampf(pitch + event.relative.y * 0.0018, -0.30, 0.85)
+		if aim_cone:
+			# The mouse moves the aim, not the view. A view that never shifts under the
+			# cursor is the whole point of the cone.
+			aim_yaw -= event.relative.x * AIM_SENS_X
+			aim_pitch = clampf(aim_pitch + event.relative.y * AIM_SENS_Y,
+				-CONE_PITCH, CONE_PITCH)
+			# Pushing past the edge turns the body with it, so you can still spin on the
+			# spot — it just costs a deliberate push rather than a careless twitch.
+			var over_y := absf(aim_yaw) - CONE_YAW
+			if over_y > 0.0:
+				yaw += signf(aim_yaw) * over_y
+				aim_yaw = signf(aim_yaw) * CONE_YAW
+			# Same at the vertical limits, where the body stops and the aim stops with it
+			var total := clampf(pitch + aim_pitch, PITCH_MIN, PITCH_MAX)
+			var over_p := (pitch + aim_pitch) - total
+			if over_p != 0.0:
+				pitch = total
+				aim_pitch -= over_p
+		else:
+			yaw -= event.relative.x * AIM_SENS_X
+			pitch = clampf(pitch + event.relative.y * AIM_SENS_Y, PITCH_MIN, PITCH_MAX)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		fire_held = event.pressed
 	elif event is InputEventKey and event.pressed and not event.echo:
@@ -450,6 +509,15 @@ func _input(event: InputEvent) -> void:
 			var spec: Dictionary = Sim.WEAPONS[player["weapon"]]
 			if player["reloading"] <= 0.0 and player["mag"] < spec["mag"]:
 				player["reloading"] = spec["reload"]
+		elif event.keycode == KEY_T:
+			# Both schemes stay live on purpose: this is an experiment, and Richard asked
+			# to fall back to plain first person if he does not like the cone.
+			aim_cone = not aim_cone
+			aim_yaw = 0.0
+			aim_pitch = 0.0
+			msg = "Aim: cone — mouse moves the gun" if aim_cone \
+				else "Aim: fixed — mouse turns you"
+			msg_t = 2.4
 
 
 func _move_axis() -> Vector2:
@@ -518,7 +586,8 @@ func _process(delta: float) -> void:
 	# switch survives a round reset.
 	if player_actor != null and player_actor.root != null:
 		player_actor.set_weapon(player["weapon"] if player["alive"] else "none")
-		player_actor.update_viewmodel(cam)
+		player_actor.update_viewmodel(cam, _aim_dir())
+	_update_crosshair()
 	_update_tracers(delta)
 	_draw_minimap()
 
@@ -547,6 +616,8 @@ func _process(delta: float) -> void:
 			pitch = deg_to_rad(_shot_pitch)
 		if _shot_pos.x != INF:
 			player["pos"] = _shot_pos
+		if _shot_aim != 0.0:
+			aim_yaw = deg_to_rad(_shot_aim)
 		if _shot_hide_player and player_actor != null and player_actor.root != null:
 			player_actor.root.visible = false
 		if _shot_frames == 0:
@@ -628,6 +699,13 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 	# also hide the gun.
 	player_actor.root.visible = false
 
+	# Cone mode: walking turns the body toward wherever you are aiming, so the view
+	# catches up on its own and you are never stuck aiming sideways down a corridor.
+	if aim_cone and playing and player_moving and aim_yaw != 0.0:
+		var swing := clampf(aim_yaw, -CONE_RECENTRE * delta, CONE_RECENTRE * delta)
+		yaw += swing
+		aim_yaw -= swing
+
 	# Playback speed comes from how fast the clip itself covered ground before its
 	# root motion was stripped (Actor.clip_mps). Playing a 5.6 m/s sprint clip at
 	# speed_scale 1.0 while the body moves 1.3 m/s is what made the feet skate.
@@ -698,9 +776,10 @@ func _update_camera() -> void:
 	# With the camera on the eye those two points coincide and the error is gone.
 	var eye := Sim.CROUCH_EYE_HEIGHT if player["crouching"] else Sim.EYE_HEIGHT
 	var p: Vector2 = player["pos"]
-	var aim := Vector3(sin(yaw) * cos(pitch), -sin(pitch), cos(yaw) * cos(pitch)).normalized()
+	# the BODY, not the aim: in cone mode the view deliberately does not follow the mouse
+	var view := _view_dir()
 	cam.position = Vector3(p.x, eye, p.y)
-	cam.look_at(cam.position + aim * 20.0, Vector3.UP)
+	cam.look_at(cam.position + view * 20.0, Vector3.UP)
 
 
 # ------------------------------------------------------------------ combat
@@ -716,8 +795,18 @@ func _thief_aim(tp: Vector2, sees: bool) -> Vector3:
 	return (to - from).normalized()
 
 
+## Where the BODY faces — the camera's forward, and the frame movement is relative to.
+func _view_dir() -> Vector3:
+	return Vector3(sin(yaw) * cos(pitch), -sin(pitch), cos(yaw) * cos(pitch)).normalized()
+
+
+## Where the gun points and the bullets go. In cone mode this is the body direction plus
+## the aim offset; with the cone off the offset is pinned at zero and the two are the
+## same direction, which is ordinary first-person behaviour.
 func _aim_dir() -> Vector3:
-	return -cam.global_transform.basis.z
+	var ay := yaw + aim_yaw
+	var ap := clampf(pitch + aim_pitch, PITCH_MIN, PITCH_MAX)
+	return Vector3(sin(ay) * cos(ap), -sin(ap), cos(ay) * cos(ap)).normalized()
 
 
 func _fire() -> void:
@@ -838,13 +927,19 @@ func _build_hud() -> void:
 		Rect2(cx - thick * 0.5, cy - half, thick, half * 2.0),    # vertical
 		Rect2(cx - half, cy - thick * 0.5, half * 2.0, thick),    # horizontal
 	]
+	# The crosshair lives in its own Control so cone mode can slide the whole thing
+	# across the screen as one unit.
+	_crosshair = Control.new()
+	_crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_crosshair.position = Vector2.ZERO
+	layer.add_child(_crosshair)
 	# every outline first, so no core is ever covered by a neighbouring outline
 	for a in arms:
-		_add_hud_rect(layer, a.grow(edge), rim)
-	_add_hud_rect(layer, dot.grow(edge), rim)
+		_add_hud_rect(_crosshair, a.grow(edge), rim)
+	_add_hud_rect(_crosshair, dot.grow(edge), rim)
 	for a in arms:
-		_add_hud_rect(layer, a, core)
-	_add_hud_rect(layer, dot, core)
+		_add_hud_rect(_crosshair, a, core)
+	_add_hud_rect(_crosshair, dot, core)
 
 	_overlay = Panel.new()
 	_overlay.position = Vector2(0, 0)
@@ -873,12 +968,40 @@ func _make_hud_click_through(layer: CanvasLayer) -> void:
 
 ## One flat rectangle of HUD. Used to build the crosshair, whose arms and centre dot
 ## each need an outline drawn behind a core.
-func _add_hud_rect(layer: CanvasLayer, r: Rect2, col: Color) -> void:
+func _add_hud_rect(parent: Node, r: Rect2, col: Color) -> void:
 	var c := ColorRect.new()
 	c.color = col
 	c.position = r.position
 	c.size = r.size
-	layer.add_child(c)
+	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent.add_child(c)
+
+
+## Slide the crosshair to wherever the aim actually points.
+##
+## Only in cone mode. With the cone off the aim IS the view, so the true position is the
+## screen centre and leaving the Control at zero avoids any dependence on resolution.
+func _update_crosshair() -> void:
+	if _crosshair == null:
+		return
+	if not aim_cone:
+		_crosshair.position = Vector2.ZERO
+		return
+	# Project by hand rather than with Camera3D.unproject_position: that returns window
+	# pixels, while the HUD is laid out in a fixed 1600x900 design space, and the two
+	# disagree at any other window size.
+	var fwd := -cam.global_transform.basis.z
+	var right := cam.global_transform.basis.x
+	var up := cam.global_transform.basis.y
+	var a := _aim_dir()
+	var z := a.dot(fwd)
+	if z <= 0.01:
+		return
+	var half_h := tan(deg_to_rad(cam.fov * 0.5))
+	var half_w := half_h * (1600.0 / 900.0)
+	_crosshair.position = Vector2(
+		(a.dot(right) / z) / half_w * 800.0,
+		-(a.dot(up) / z) / half_h * 450.0)
 
 
 func _mk_label(parent: Node, pos: Vector2, size: int, col: Color) -> Label:
