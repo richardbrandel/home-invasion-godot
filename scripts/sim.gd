@@ -120,7 +120,6 @@ const THIEF_HEALTH := 100
 const THIEF_DAMAGE := 7
 const THIEF_SIGHT := 26.0
 const THIEF_FIRE_HUNTING := 1.35
-const THIEF_FIRE_CARRYING := 1.9
 const THIEF_MAG := 8
 const THIEF_RELOAD := 1.5
 const GRAB_RANGE := 1.4
@@ -543,13 +542,17 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 	# cover during this same step, and firing through a wall would be a bug.
 	var can: bool = player["alive"] and \
 		tpos.distance_to(ppos) < THIEF_SIGHT and not los_blocked(tpos, ppos)
-	if can and thief["reloading"] <= 0.0 and thief["cd"] <= 0.0:
+	# He cannot fire with his hands full — one hand is on the loot, which is the whole
+	# point of the trip. This is the rule that matches the pistol being holstered while
+	# he carries. `can` still means line of sight, not permission to shoot.
+	var may_fire: bool = can and thief["carry"] == ""
+	if may_fire and thief["reloading"] <= 0.0 and thief["cd"] <= 0.0:
 		if thief["mag"] <= 0:
 			thief["reloading"] = THIEF_RELOAD
 			thief["mag"] = THIEF_MAG
 		else:
 			thief["mag"] -= 1
-			thief["cd"] = THIEF_FIRE_CARRYING if thief["carry"] != "" else THIEF_FIRE_HUNTING
+			thief["cd"] = THIEF_FIRE_HUNTING
 			events.append({"type": "thiefShot", "spread": 0.10, "dmg": THIEF_DAMAGE})
 	return can
 

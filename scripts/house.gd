@@ -13,6 +13,9 @@ class_name House
 ## the moment an asset is swapped.
 
 const SCALE := 0.5
+## The city vehicles are authored at roughly 1x, not the 2x of the other KayKit sets,
+## so they need their own multiplier on top of SCALE or they come out toy-sized.
+const VAN_SCALE := 2.5
 const A := "res://assets/kaykit/"
 
 # KayKit's modular wall panel is 4.00 x 4.00 x 0.50 m at source scale.
@@ -89,7 +92,10 @@ static func build_floors(parent: Node3D) -> void:
 	var fbox := BoxMesh.new()
 	fbox.size = Vector3(house.size.x, 0.1, house.size.y)
 	f.mesh = fbox
-	f.position = Vector3(house.position.x + house.size.x * 0.5, -0.05,
+	# top face at +0.02 rather than 0.0: the exterior lawn is a plane at y = 0 over the
+	# same footprint, and once the scene went daylight the two z-fought into a jagged
+	# green/brown mess across every interior floor
+	f.position = Vector3(house.position.x + house.size.x * 0.5, -0.03,
 		house.position.y + house.size.y * 0.5)
 	f.material_override = _flat(Color(0.40, 0.29, 0.19))
 	parent.add_child(f)
@@ -138,6 +144,27 @@ static func build_floors(parent: Node3D) -> void:
 ## was recoloured offline into wall_texture_clean.png (teal pixels only), and the
 ## walls point at that copy. Everything else still samples the original.
 static var _wall_mat: StandardMaterial3D
+
+
+## A ceiling across the whole footprint.
+##
+## Without one the daylight key reaches straight into every room. Godot does not
+## occlude light — the walls block only what they physically cover — so switching the
+## scene from dusk to day turned the interior into a roofless diorama with the warm
+## practicals washed out. The underside is all the camera ever sees, so it is plain
+## warm plaster rather than a roof.
+static func build_ceiling(parent: Node3D) -> void:
+	var house := Sim.HOUSE
+	var c := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(house.size.x, 0.22, house.size.y)
+	c.mesh = box
+	c.position = Vector3(house.position.x + house.size.x * 0.5,
+		WALL_TARGET_H + 0.11,
+		house.position.y + house.size.y * 0.5)
+	c.material_override = _flat(Color(0.80, 0.78, 0.74))
+	c.name = "Ceiling"
+	parent.add_child(c)
 
 
 static func use_clean_wall_texture(inst: Node3D) -> void:
@@ -262,10 +289,15 @@ static func build_exterior(parent: Node3D) -> void:
 	drive.material_override = _flat(Color(0.28, 0.28, 0.29))
 	parent.add_child(drive)
 
-	# the van — the loot has to go somewhere
+	# the van — the loot has to go somewhere.
+	# NOTE: the city set is NOT authored at the same 2x scale as the restaurant and
+	# character sets. At House.SCALE = 0.5 the station wagon measures about 0.94 m
+	# long — a shoebox, invisible from the house even in daylight — so it carries its
+	# own multiplier.
 	var van := place(parent, "city", "car_stationwagon",
 		Vector3(Sim.VAN.position.x + Sim.VAN.size.x * 0.5, 0,
-			Sim.VAN.position.y + Sim.VAN.size.y * 0.5), PI * 0.5)
+			Sim.VAN.position.y + Sim.VAN.size.y * 0.5), PI * 0.5, true,
+		Vector3(VAN_SCALE, VAN_SCALE, VAN_SCALE))
 	if van != null:
 		van.name = "Van"
 
@@ -283,6 +315,7 @@ static func build_all(parent: Node3D) -> void:
 	build_exterior(parent)
 	build_floors(parent)
 	build_walls(parent)
+	build_ceiling(parent)
 	build_furniture(parent)
 
 

@@ -122,18 +122,24 @@ func _setup_environment() -> void:
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
 	var sm := ProceduralSkyMaterial.new()
-	# Deep dusk, not a void: the first pass crushed these to near-black and the
-	# whole upper frame read as a hole rather than a sky.
-	sm.sky_top_color = Color(0.100, 0.130, 0.200)
-	sm.sky_horizon_color = Color(0.235, 0.260, 0.310)
-	sm.ground_bottom_color = Color(0.055, 0.060, 0.070)
-	sm.ground_horizon_color = Color(0.130, 0.140, 0.155)
+	# Daytime, deliberately. Dusk looked better, but you could not see the van or watch
+	# the intruder cross the driveway, and those are the two things the round is about.
+	# The dusk values are kept here so the mood can be restored: top (0.100,0.130,0.200),
+	# horizon (0.235,0.260,0.310), ground bottom (0.055,0.060,0.070), ground horizon
+	# (0.130,0.140,0.155), sun energy 0.28 in (0.58,0.70,0.95), ambient 0.22.
+	sm.sky_top_color = Color(0.150, 0.330, 0.650)
+	sm.sky_horizon_color = Color(0.640, 0.760, 0.880)
+	sm.ground_bottom_color = Color(0.180, 0.190, 0.180)
+	sm.ground_horizon_color = Color(0.480, 0.540, 0.520)
 	sm.sun_angle_max = 8.0
 	sky.sky_material = sm
 	env.sky = sky
 
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.22        # was 0.55 — the flat fill is the enemy
+	# Daylight sky as ambient. Godot does not occlude skylight, so this lights the
+	# interior too — which is exactly why the house now needs a ceiling to keep the
+	# direct sun out (see House.build_all).
+	env.ambient_light_energy = 0.55
 
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.tonemap_white = 3.0
@@ -144,15 +150,18 @@ func _setup_environment() -> void:
 	env.ssao_power = 1.6
 
 	env.glow_enabled = true
-	env.glow_intensity = 0.85
-	env.glow_bloom = 0.12
-	env.glow_hdr_threshold = 0.85
+	env.glow_intensity = 0.45
+	env.glow_bloom = 0.10
+	# daylight pushes most of the frame past the old 0.85 threshold, which bloomed the
+	# whole image; raise it so only genuinely bright things glow
+	env.glow_hdr_threshold = 1.60
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN
 
 	env.fog_enabled = true
 	env.fog_mode = Environment.FOG_MODE_EXPONENTIAL
-	env.fog_light_color = Color(0.045, 0.055, 0.080)
-	env.fog_density = 0.022
+	# a touch of distance haze, nothing like the night fog this replaces
+	env.fog_light_color = Color(0.600, 0.680, 0.780)
+	env.fog_density = 0.0035
 	# fog_sky_affect=1.0 tints the SKY with the fog colour, which crushed the whole
 	# upper frame to black. Let the sky show through; the fog still works on geometry.
 	env.fog_sky_affect = 0.0
@@ -160,18 +169,23 @@ func _setup_environment() -> void:
 
 	env.adjustment_enabled = true
 	env.adjustment_brightness = 1.0
-	env.adjustment_contrast = 1.30
-	env.adjustment_saturation = 0.82
+	env.adjustment_contrast = 1.06
+	env.adjustment_saturation = 1.0
 
 	we.environment = env
 	add_child(we)
 
-	# --- one weak, cool key from outside. Not the main source; it exists to
-	#     separate the house from the night and to cast the exterior shadows.
+	# --- the sun, now the key light. It used to be a weak cool rim whose only job was
+	#     to separate the house from the night; outside is meant to be readable now, so
+	#     this carries the daylight and casts the exterior shadows.
 	sun = DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-38, 36, 0)
-	sun.light_color = Color(0.58, 0.70, 0.95)
-	sun.light_energy = 0.28
+	# Y = 216, not 36: the light travels along its own -Z, so at 36 it came from the
+	# south and left the intruder's front — the side you look at as he walks up the
+	# drive — in shadow, a black silhouette with no visible pistol. Flipped, he is lit
+	# as he approaches, which is the whole point of the daylight change.
+	sun.rotation_degrees = Vector3(-52, 216, 0)
+	sun.light_color = Color(1.0, 0.96, 0.88)
+	sun.light_energy = 1.25
 	sun.shadow_enabled = true
 	sun.directional_shadow_max_distance = 70.0
 	sun.shadow_bias = 0.03
@@ -256,6 +270,9 @@ func _spawn_actors() -> void:
 		add_child(thief_actor.root)
 		House.ground_node(thief_actor.root)
 		thief_actor.ground_offset = thief_actor.root.position.y
+		# he carries a pistol as well; _update_actors holsters it while he is loaded up
+		thief_actor.attach_weapon()
+		thief_actor.set_weapon("pistol")
 
 	# a separate body so bullet rays can tell the thief from the scenery
 	thief_hitbox = StaticBody3D.new()
@@ -614,6 +631,15 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 	thief_actor.root.visible = true
 	thief_hitbox.position = Vector3(tp.x, 0, tp.y)
 
+	var sees: bool = thief["alive"] and playing \
+		and Sim.can_see(tp, player["pos"], Sim.THIEF_SIGHT)
+
+	# His pistol is out only while his hands are free — which is precisely when the
+	# sim lets him fire. Prop and rule agree, so a holstered gun never shoots and a
+	# drawn one always could.
+	thief_actor.set_weapon("pistol" if (thief["alive"] and thief["carry"] == "") else "none")
+	thief_actor.update_weapon(_thief_aim(tp, sees))
+
 	if not thief["alive"]:
 		if thief_actor.has_clip(Actor.DEATH):
 			thief_actor.play(Actor.DEATH, 1.0)
@@ -621,7 +647,6 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 	else:
 		thief_hitbox.collision_layer = LAYER_THIEF
 		var moving: bool = playing and (thief["route"] as Array).size() > 0
-		var sees: bool = playing and Sim.can_see(tp, player["pos"], Sim.THIEF_SIGHT)
 		if thief["carry"] != "" or moving:
 			# He only ever moves at THIEF_SPEED, so the run clip — authored at
 			# 5.6 m/s — played as a slow-motion sprint on the spot. The walk clip
@@ -665,6 +690,18 @@ func _update_camera() -> void:
 
 
 # ------------------------------------------------------------------ combat
+## Where the intruder points his pistol: at the homeowner when he can actually see
+## him, and straight ahead otherwise. Tracking you through a wall would look wrong,
+## and the sim already runs the same sight test for his trigger finger.
+func _thief_aim(tp: Vector2, sees: bool) -> Vector3:
+	var from := Vector3(tp.x, 1.30, tp.y)
+	# Sim measures yaw from +X toward +Z, so his facing is (cos, sin) in XZ
+	var to := from + Vector3(cos(thief["yaw"]), 0.0, sin(thief["yaw"]))
+	if sees and player["alive"]:
+		to = Vector3(player["pos"].x, Sim.EYE_HEIGHT, player["pos"].y)
+	return (to - from).normalized()
+
+
 func _aim_dir() -> Vector3:
 	return -cam.global_transform.basis.z
 

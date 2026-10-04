@@ -235,6 +235,28 @@ func _init() -> void:
 			Sim.remaining(loot) == 0,
 			"delivered %d/3 in %.0fs with %d re-routes" % [3 - Sim.remaining(loot), t2, rr])
 
+	# ---- the intruder's hands: free means armed, carrying means not
+	_banner("the intruder cannot fire with his hands full")
+	for carrying in [false, true]:
+		player = Sim.create_player()
+		thief = Sim.create_thief()
+		loot = Sim.create_loot()
+		thief["pos"] = (player["pos"] as Vector2) + Vector2(0, 2.0)
+		thief["prev"] = thief["pos"]
+		thief["carry"] = "TV" if carrying else ""
+		thief["cd"] = 0.0
+		thief["mag"] = 8
+		thief["reloading"] = 0.0
+		events = []
+		Sim.step_thief(thief, player, loot, events, dt)
+		var fired := false
+		for ev in events:
+			if ev["type"] == "thiefShot":
+				fired = true
+		check("does NOT fire while carrying the loot" if carrying else "fires when his hands are free",
+			fired != carrying,
+			"fired=%s carrying=%s" % [fired, carrying])
+
 	# ---- thief stays in bounds
 	player = Sim.create_player()
 	thief = Sim.create_thief()
