@@ -24,7 +24,17 @@ const CITY_SCALE := 2.5
 const ROAD_SINK := 0.22
 ## The restaurant door leaf needs its own scale: at House.SCALE it comes out taller than the
 ## 2 m wall it hangs in.
-const DOOR_SCALE := 0.34
+## The door model MEASURED, not guessed. `door_A` is 1.60 x 2.80 x 0.77 m at source, so the
+## old uniform DOOR_SCALE of 0.34 built a leaf 55 cm wide and 95 cm tall — a doll's-house door
+## hanging in the opening, which is exactly what Richard described.
+const DOOR_SRC := Vector3(1.60, 2.80, 0.77)
+## What a front door actually measures. Non-uniform on purpose: the model's own proportions
+## are 1:1.75 and a real door is nearer 1:2.2.
+const DOOR_WANT := Vector3(0.96, 2.04, 0.20)
+## The head of the opening. The gap between the two south wall runs is FULL HEIGHT, so at a
+## 3 m ceiling the doorway was a 3 m hole with a 2 m door in it. A real opening is about this
+## with wall above.
+const DOOR_TOP := 2.10
 const A := "res://assets/kaykit/"
 
 # KayKit's modular wall panel is 4.00 x 4.00 x 0.50 m at source scale.
@@ -32,7 +42,14 @@ const WALL_SRC_W := 4.0
 const WALL_SRC_H := 4.0
 const WALL_SRC_D := 0.5
 
-const WALL_TARGET_H := 2.0     # must match Sim.WALL_HEIGHT
+const WALL_TARGET_H := 3.0     # must match Sim.WALL_HEIGHT
+## Was 2.0. At 2.0 m the ceiling is only 35 cm above a 1.62 m eye, so at a 68-degree
+## field of view the ceiling filled 54-66% of the upper frame in EVERY room — measured
+## across three views. 3.0 m is a real ceiling height and is Richard's call.
+##
+## Note the wall module is scaled NON-UNIFORMLY (sx fits the bay, sy is this height,
+## sz is the thickness), so raising this stretches each panel vertically by 1.5x and the
+## windows with it.
 const WALL_TARGET_D := 0.25    # must match Sim.WALL_THICKNESS
 ## Where the ceiling lights hang, one per room, matching the practical lights in
 ## game.gd's _setup_environment so the fitting sits where the light is coming from.
@@ -285,9 +302,28 @@ static func build_ceiling(parent: Node3D) -> void:
 			parent.add_child(g)
 
 
-static func use_clean_wall_texture(inst: Node3D) -> void:
+## The front door's own material.
+##
+## The restaurant atlas paints the door leaf the same teal as the window frames, which is
+## exactly why Richard described it as "a green thing hanging in the middle of the doorway".
+## The leaf needs its own colour, not the trim's.
+static var _door_mat: StandardMaterial3D
+
+
+static func use_door_texture(inst: Node3D) -> void:
 	if inst == null:
 		return
+	if _door_mat == null:
+		_door_mat = StandardMaterial3D.new()
+		# a painted front door rather than bare wood: it reads as a door at a glance
+		_door_mat.albedo_color = Color(0.86, 0.84, 0.80)
+		_door_mat.roughness = 0.62
+		_door_mat.metallic = 0.0
+	for c in inst.find_children("*", "MeshInstance3D", true, false):
+		(c as MeshInstance3D).material_override = _door_mat
+
+
+static func wall_material() -> StandardMaterial3D:
 	if _wall_mat == null:
 		_wall_mat = StandardMaterial3D.new()
 		var tex := load("res://assets/kaykit/restaurant/wall_texture_clean.png")
@@ -295,8 +331,18 @@ static func use_clean_wall_texture(inst: Node3D) -> void:
 			_wall_mat.albedo_texture = tex
 		_wall_mat.roughness = 0.93
 		_wall_mat.metallic = 0.0
+	return _wall_mat
+
+
+static func use_clean_wall_texture(inst: Node3D) -> void:
+	if inst == null:
+		return
+	var m := wall_material()
 	for c in inst.find_children("*", "MeshInstance3D", true, false):
-		(c as MeshInstance3D).material_override = _wall_mat
+		(c as MeshInstance3D).material_override = m
+	# find_children walks DESCENDANTS only, so a bare MeshInstance3D would be missed
+	if inst is MeshInstance3D:
+		(inst as MeshInstance3D).material_override = m
 
 static func build_wall_run(parent: Node3D, run: Rect2, open_bays := {}) -> void:
 	var horizontal := run.size.x >= run.size.y
@@ -403,12 +449,38 @@ static func build_exterior(parent: Node3D) -> void:
 	# intruder has already come through it.
 	# DOOR_SCALE is not House.SCALE: at 0.5 the leaf comes out taller than the 2 m wall it
 	# hangs in and sticks up above the eaves.
+	# HINGED at the edge of the opening, not centred in it. Placed at the middle the leaf
+	# floats in the gap; a door belongs on a hinge at one side, standing open.
+	var dscale := Vector3(DOOR_WANT.x / DOOR_SRC.x, DOOR_WANT.y / DOOR_SRC.y,
+		DOOR_WANT.z / DOOR_SRC.z)
+	var hinge := deg_to_rad(-74.0)
+	var leaf_w := DOOR_WANT.x
 	var door := place(parent, "restaurant", "door_A",
-		Vector3((Sim.DOOR_GAP.x + Sim.DOOR_GAP.y) * 0.5, 0,
-			house.end.y - Sim.WALL_THICKNESS * 0.5),
-		deg_to_rad(-74.0), true, Vector3(DOOR_SCALE, DOOR_SCALE, DOOR_SCALE))
+		Vector3(Sim.DOOR_GAP.x + cos(hinge) * leaf_w * 0.5, 0,
+			house.end.y - Sim.WALL_THICKNESS * 0.5 - sin(hinge) * leaf_w * 0.5),
+		hinge, true, dscale)
 	if door != null:
 		door.name = "FrontDoor"
+		use_door_texture(door)
+
+	# The head of the opening. Without this the doorway is a hole all the way to the ceiling,
+	# which a 3 m wall makes glaring. Filled with wall so the opening is a door-shaped hole.
+	var head := MeshInstance3D.new()
+	var hb := BoxMesh.new()
+	hb.size = Vector3(Sim.DOOR_GAP.y - Sim.DOOR_GAP.x,
+		WALL_TARGET_H - DOOR_TOP, Sim.WALL_THICKNESS)
+	head.mesh = hb
+	head.position = Vector3((Sim.DOOR_GAP.x + Sim.DOOR_GAP.y) * 0.5,
+		DOOR_TOP + (WALL_TARGET_H - DOOR_TOP) * 0.5,
+		house.end.y - Sim.WALL_THICKNESS * 0.5)
+	parent.add_child(head)
+	# FLAT, not the atlas. `wall_texture_clean.png` is an atlas with coloured regions in it,
+	# and a BoxMesh maps the whole of it 0..1 across every face — so the lintel rendered as a
+	# red-and-white slab. Colour sampled from the wall beside the opening in a render.
+	var head_mat := StandardMaterial3D.new()
+	head_mat.albedo_color = Color(0.612, 0.582, 0.603)
+	head_mat.roughness = 0.93
+	head.material_override = head_mat
 
 	# lawn
 	var lawn := MeshInstance3D.new()

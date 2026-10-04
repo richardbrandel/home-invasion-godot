@@ -14,7 +14,7 @@ class_name Sim
 const HOUSE := Rect2(-8, -19, 16, 11)          # x, z, width, depth
 ## Matches House.WALL_TARGET_H, which is KayKit's 4 m wall module at 0.5 scale.
 ## Changing one without the other makes the collision boxes disagree with the art.
-const WALL_HEIGHT := 2.0
+const WALL_HEIGHT := 3.0
 const WALL_THICKNESS := 0.25
 const DOOR_GAP := Vector2(-1, 1)               # front door, in the south wall
 const HALL_GAP := Vector2(-2, 2)               # opening in the interior wall

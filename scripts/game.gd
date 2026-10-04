@@ -71,9 +71,10 @@ const RECOIL_RECOVER := 0.85    # rad/s the view drifts back
 ## which is more than half the width of the screen. CAM_BACK is the value that actually
 ## reads, and it is a single number to tune.
 const CAM_BACK := 0.90
-## Ceiling on the lift, and it is a gameplay limit rather than a taste one: the walls are
-## 2.0 m and the eye is 1.65 m, so much above +0.25 m the camera rises over the walls and
-## the house becomes a dollhouse — you see the intruder over cover the minimap hides.
+## Ceiling on the lift, and it was a gameplay limit rather than a taste one: the walls were
+## 2.0 m against a 1.62 m eye, so much above +0.25 m the camera rose over the walls and the
+## house became a dollhouse. The walls are 3.0 m now, so that constraint is gone and this
+## could be raised — but 0.22 frames the rooms well, so it stays until there is a reason.
 const CAM_UP := 0.22
 ## Sideways offset. A gun held in front of the body is hidden by the body from directly
 ## behind, so seeing the weapon at all needs the camera off his shoulder.
@@ -685,7 +686,12 @@ func reset() -> void:
 	aim_yaw = 0.0
 	aim_pitch = 0.0
 	fire_held = false
+	# Hide the overlay AND wipe its text. Hiding alone was not enough to be sure: the labels
+	# kept the previous round's result ("FAILURE", "The van drove off with everything") for
+	# the whole of the next round, invisible but present.
 	_overlay.visible = false
+	_ov_title.text = ""
+	_ov_sub.text = ""
 	_refresh_hud()
 
 
