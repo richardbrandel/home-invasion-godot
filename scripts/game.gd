@@ -59,6 +59,8 @@ var _shot_yaw := INF
 var _shot_pitch := INF
 var _shot_after := 0.0
 var _shot_wait := 0.0
+var _shot_pos := Vector2(INF, INF)
+var _shot_hide_player := false
 
 
 func _ready() -> void:
@@ -96,6 +98,16 @@ func _ready() -> void:
 		if a.begins_with("--shot-after="):
 			_shot_after = float(a.substr(13))
 			_shot_wait = _shot_after
+		# stand somewhere specific. Rooms are walled off from the spawn, so without
+		# this the only thing photographable is whatever you can see from the hall.
+		if a.begins_with("--shot-pos="):
+			var bits := a.substr(11).split(",")
+			if bits.size() == 2:
+				_shot_pos = Vector2(float(bits[0]), float(bits[1]))
+		# the camera sits behind the pawn, so he occludes whatever is directly in
+		# front of him — which is exactly what a prop inspection wants to see
+		if a == "--shot-hide-player":
+			_shot_hide_player = true
 
 
 # ------------------------------------------------------------- environment
@@ -261,55 +273,116 @@ func _spawn_actors() -> void:
 
 
 # ---------------------------------------------------------------------- loot
-## A visible object per valuable, so the theft can actually be read.
+## A visible, recognisable object per valuable, so the theft can actually be read.
 ##
-## There never was one: the only cues that the intruder had taken something were
-## the HUD counter, a greyed dot on the minimap, and — until the gaits were unified
-## to fix foot-skating — the fact that a laden intruder walked where a hunting one
-## ran. With that gone he simply left the house looking empty handed.
+## There never was one: the only cues that the intruder had taken something were the
+## HUD counter, a greyed dot on the minimap, and — until the gaits were unified to
+## fix foot-skating — the fact that a laden intruder walked where a hunting one ran.
+## With that gone he simply left the house looking empty handed.
 ##
-## Each item now sits on the floor where it belongs, rides on the intruder's chest
-## while he carries it, and lands in a pile where he handed it over. Same approach
-## as the weapon props: positioned from the actor's transform each frame rather than
-## reparented, which avoids the BoneAttachment3D trap documented in AGENTS.md.
+## Each item now sits on the floor where it belongs, rides with the intruder while he
+## carries it, and is set down where he handed it over. Positioned from the actor's
+## transform each frame, the same approach as the weapon props, rather than
+## reparented — that avoids the BoneAttachment3D trap recorded in AGENTS.md.
+##
+## Every prop is assembled from boxes and cylinders, so there is nothing to import
+## and no licence to worry about. Each is modelled with its base at y = 0, which is
+## what lets the same node drop straight onto the floor at either end.
 func _build_loot() -> void:
 	for l in loot:
-		var m := MeshInstance3D.new()
-		var b := BoxMesh.new()
-		b.size = Vector3(0.36, 0.30, 0.26)
-		m.mesh = b
-		var mat := StandardMaterial3D.new()
-		mat.albedo_color = Color(0.95, 0.73, 0.26)
-		mat.roughness = 0.45
-		# a little self-illumination so it still reads in the dim interior
-		mat.emission_enabled = true
-		mat.emission = Color(0.40, 0.26, 0.06)
-		m.material_override = mat
-		add_child(m)
-		_loot_nodes.append(m)
+		var prop := _make_prop(String(l["label"]))
+		prop.position = Vector3((l["pos"] as Vector2).x, 0.0, (l["pos"] as Vector2).y)
+		add_child(prop)
+		_loot_nodes.append(prop)
+
+
+## One primitive of a prop.
+func _part(parent: Node3D, mesh: Mesh, pos: Vector3, col: Color,
+		rough: float = 0.55, metal: float = 0.0,
+		rot: Vector3 = Vector3.ZERO) -> void:
+	var m := MeshInstance3D.new()
+	m.mesh = mesh
+	m.position = pos
+	m.rotation = rot
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = col
+	mat.roughness = rough
+	mat.metallic = metal
+	# a trace of self-illumination, so a valuable is still findable in a dim corner.
+	# These are gameplay objectives; at 0.10 they measured near-black in the bedroom.
+	mat.emission_enabled = true
+	mat.emission = col * 0.18
+	m.material_override = mat
+	parent.add_child(m)
+
+
+func _box(w: float, h: float, d: float) -> BoxMesh:
+	var b := BoxMesh.new()
+	b.size = Vector3(w, h, d)
+	return b
+
+
+## A stand-in for each valuable that reads as the thing it claims to be.
+func _make_prop(label: String) -> Node3D:
+	var p := Node3D.new()
+	match label:
+		"TV":
+			# flat panel on a small stand: dark bezel, darker glossy screen
+			_part(p, _box(0.98, 0.58, 0.05), Vector3(0, 0.50, 0.0), Color(0.10, 0.10, 0.12), 0.45)
+			_part(p, _box(0.90, 0.50, 0.02), Vector3(0, 0.50, 0.036), Color(0.03, 0.04, 0.06), 0.12, 0.5)
+			_part(p, _box(0.10, 0.18, 0.06), Vector3(0, 0.12, 0.0), Color(0.10, 0.10, 0.12), 0.45)
+			_part(p, _box(0.48, 0.03, 0.22), Vector3(0, 0.015, 0.0), Color(0.10, 0.10, 0.12), 0.45)
+		"Laptop":
+			# base with a keyboard well, and a lid tipped back off the hinge
+			_part(p, _box(0.34, 0.02, 0.24), Vector3(0, 0.01, 0.0), Color(0.70, 0.72, 0.75), 0.35, 0.6)
+			_part(p, _box(0.29, 0.006, 0.14), Vector3(0, 0.023, 0.02), Color(0.13, 0.13, 0.15), 0.75)
+			var lid := Node3D.new()
+			lid.position = Vector3(0, 0.02, -0.12)
+			lid.rotation.x = deg_to_rad(-100.0)
+			p.add_child(lid)
+			_part(lid, _box(0.34, 0.22, 0.014), Vector3(0, 0.11, 0.0), Color(0.70, 0.72, 0.75), 0.35, 0.6)
+			_part(lid, _box(0.30, 0.18, 0.006), Vector3(0, 0.11, 0.010), Color(0.05, 0.06, 0.08), 0.15, 0.4)
+		"Safe":
+			# heavy dark body, proud door, dial and handle
+			_part(p, _box(0.46, 0.46, 0.40), Vector3(0, 0.23, 0.0), Color(0.24, 0.25, 0.28), 0.55, 0.5)
+			_part(p, _box(0.38, 0.38, 0.03), Vector3(0, 0.23, 0.205), Color(0.33, 0.34, 0.37), 0.50, 0.6)
+			var dial := CylinderMesh.new()
+			dial.top_radius = 0.05
+			dial.bottom_radius = 0.05
+			dial.height = 0.04
+			# CylinderMesh runs along +Y, so tip it to face out of the door
+			_part(p, dial, Vector3(0.09, 0.28, 0.23), Color(0.78, 0.79, 0.81),
+				0.25, 0.9, Vector3(PI * 0.5, 0.0, 0.0))
+			_part(p, _box(0.16, 0.035, 0.035), Vector3(0.09, 0.15, 0.23),
+				Color(0.78, 0.79, 0.81), 0.25, 0.9)
+		_:
+			# an unrecognised label keeps a plain crate rather than nothing at all
+			_part(p, _box(0.36, 0.30, 0.26), Vector3(0, 0.15, 0.0), Color(0.95, 0.73, 0.26), 0.45)
+	return p
 
 
 func _update_loot() -> void:
 	for i in _loot_nodes.size():
-		var m: MeshInstance3D = _loot_nodes[i]
+		var prop: Node3D = _loot_nodes[i]
 		var l: Dictionary = loot[i]
 		if l["delivered"]:
-			# pile them where they were handed over, so you can see what he got
-			m.visible = true
-			m.position = Vector3(Sim.DROP.x - 0.55 + 0.55 * float(i), 0.17, Sim.DROP.y)
-			m.rotation.y = 0.5 * float(i)
+			# set down where it was handed over, so you can see what he got away with
+			prop.visible = true
+			prop.position = Vector3(Sim.DROP.x - 0.55 + 0.55 * float(i), 0.0, Sim.DROP.y)
+			prop.rotation.y = 0.6 * float(i)
 		elif l["taken"]:
-			# carried: ride on his chest, facing the way he faces
+			# carried: held in front of him, turned the way he is facing. The base sits
+			# at waist height so a tall prop does not cover his head.
 			var ok := thief_actor != null and thief_actor.root != null
-			m.visible = ok
+			prop.visible = ok
 			if ok:
 				var r: Transform3D = thief_actor.root.global_transform
-				m.global_position = r.origin + Vector3(0, 1.02, 0) + r.basis.z * 0.26
-				m.global_rotation = Vector3(0, thief_actor.root.rotation.y, 0)
+				prop.global_position = r.origin + Vector3(0, 0.50, 0) + r.basis.z * 0.30
+				prop.global_rotation = Vector3(0, thief_actor.root.rotation.y, 0)
 		else:
-			m.visible = true
-			m.position = Vector3((l["pos"] as Vector2).x, 0.17, (l["pos"] as Vector2).y)
-			m.rotation.y = 0.0
+			prop.visible = true
+			prop.position = Vector3((l["pos"] as Vector2).x, 0.0, (l["pos"] as Vector2).y)
+			prop.rotation.y = 0.0
 
 
 # -------------------------------------------------------------------- state
@@ -448,6 +521,10 @@ func _process(delta: float) -> void:
 			yaw = deg_to_rad(_shot_yaw)
 		if _shot_pitch != INF:
 			pitch = deg_to_rad(_shot_pitch)
+		if _shot_pos.x != INF:
+			player["pos"] = _shot_pos
+		if _shot_hide_player and player_actor != null and player_actor.root != null:
+			player_actor.root.visible = false
 		if _shot_frames == 0:
 			_capture_and_quit()
 
