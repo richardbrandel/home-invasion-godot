@@ -46,7 +46,12 @@ var base_scale := 1.0
 var merged := 0
 var _pistol: Node3D = null
 var _shotgun: Node3D = null
-var _holder: Node3D = null
+var _holder: Node3D
+var kit_root: Node3D
+var _beanie: MeshInstance3D
+var _bag: MeshInstance3D
+var _gloves: Array[MeshInstance3D] = []
+var _kit_bones := {}
 var _skeleton: Skeleton3D = null
 var _hand_bone := -1
 var _current := ""
@@ -426,13 +431,14 @@ func attach_weapon() -> void:
 
 ## One primitive of a weapon prop.
 func _part(parent: Node3D, mesh: Mesh, pos: Vector3, mat: Material,
-		rot: Vector3 = Vector3.ZERO) -> void:
+		rot: Vector3 = Vector3.ZERO) -> MeshInstance3D:
 	var m := MeshInstance3D.new()
 	m.mesh = mesh
 	m.position = pos
 	m.rotation = rot
 	m.material_override = mat
 	parent.add_child(m)
+	return m
 
 
 func _box(w: float, h: float, d: float) -> BoxMesh:
@@ -453,6 +459,97 @@ func _cyl(r: float, top: float, h: float) -> CylinderMesh:
 ## World position of the muzzle, so a tracer can be drawn out of the gun rather than out
 ## of the camera. This is drawing only — the shot ray itself is cast from the camera so
 ## that the crosshair stays honest (see game.gd _fire).
+## The intruder's kit: a beanie, gloves and a holdall.
+##
+## He is a shirtless, heavily muscled Mixamo man, which reads as NAKED rather than as a
+## burglar — the audit's point, and most of why the two characters are hard to tell apart
+## at a glance. There is no clothed mesh to swap in, so the kit is built from primitives
+## and ridden on the bones, exactly as both characters' weapons already are.
+func attach_kit() -> void:
+	if root == null or _skeleton == null:
+		return
+	# Beside `root`, never under it, and for the same reason the weapon is: a hidden
+	# ancestor hides every descendant, and the model is hidden when the camera jams
+	# against a wall behind the player.
+	var holder_parent: Node = root.get_parent()
+	if holder_parent == null:
+		holder_parent = root
+	kit_root = Node3D.new()
+	holder_parent.add_child(kit_root)
+
+	# The mesh itself is bare skin from the collarbones down, and a shirtless man with a
+	# beanie on still reads as a naked man with a beanie on. There is no clothed variant to
+	# swap in, so the BODY MATERIAL is darkened instead — which takes the face with it, and
+	# a dark face under a dark hat is exactly what a balaclava looks like.
+	#
+	# Only `root` is walked, so the weapons on the holder beside it are untouched.
+	for c in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := c as MeshInstance3D
+		for surf in mi.get_surface_override_material_count():
+			pass
+		var src := mi.get_active_material(0)
+		if src is StandardMaterial3D and mi.material_override == null:
+			var dup := (src as StandardMaterial3D).duplicate() as StandardMaterial3D
+			dup.albedo_color = dup.albedo_color * Color(0.24, 0.25, 0.30)
+			mi.material_override = dup
+
+	var dark := StandardMaterial3D.new()
+	dark.albedo_color = Color(0.045, 0.048, 0.060)
+	dark.roughness = 0.88
+	var cloth := StandardMaterial3D.new()
+	cloth.albedo_color = Color(0.085, 0.092, 0.115)
+	cloth.roughness = 0.96
+
+	_beanie = _part(kit_root, _cyl(0.098, 0.082, 0.105), Vector3.ZERO, dark)
+	_beanie.name = "Beanie"
+	_bag = _part(kit_root, _box(0.28, 0.32, 0.13), Vector3.ZERO, cloth)
+	_bag.name = "Holdall"
+	for i in 2:
+		var g := _part(kit_root, _box(0.082, 0.098, 0.150), Vector3.ZERO, dark)
+		g.name = "Glove%d" % i
+		_gloves.append(g)
+
+
+func _kit_bone(suffix: String) -> int:
+	if not _kit_bones.has(suffix):
+		var found := -1
+		for i in _skeleton.get_bone_count():
+			if String(_skeleton.get_bone_name(i)).ends_with(suffix):
+				found = i
+				break
+		_kit_bones[suffix] = found
+	return int(_kit_bones[suffix])
+
+
+## World transform of a bone, or identity if the rig has no such bone.
+func _bone_tf(suffix: String) -> Transform3D:
+	var i := _kit_bone(suffix)
+	if i < 0 or _skeleton == null:
+		return Transform3D()
+	return _skeleton.global_transform * _skeleton.get_bone_global_pose(i)
+
+
+## Called every frame, AFTER the animation has written the pose. A bone global read before
+## that is last frame's, which makes the hat lag by a frame and swim on the head.
+func update_kit() -> void:
+	if kit_root == null or _skeleton == null:
+		return
+	if _kit_bone("Head") >= 0:
+		var h := _bone_tf("Head")
+		# the bone's origin is the base of the skull and +Y runs up it
+		h.origin += h.basis.y * 0.075
+		_beanie.global_transform = h
+	if _kit_bone("RightHand") >= 0:
+		_gloves[0].global_transform = _bone_tf("RightHand")
+	if _kit_bone("LeftHand") >= 0:
+		_gloves[1].global_transform = _bone_tf("LeftHand")
+	if _kit_bone("Spine2") >= 0:
+		# only the POSITION comes from the spine; the orientation comes from the body's
+		# yaw, so the bag hangs upright instead of rolling with his shoulders
+		var b := carry_basis()
+		_bag.global_transform = Transform3D(b, _bone_tf("Spine2").origin - b.z * 0.155)
+
+
 func muzzle() -> Vector3:
 	if _holder == null:
 		return Vector3.ZERO

@@ -458,6 +458,7 @@ func _spawn_actors() -> void:
 		thief_actor.ground_offset = thief_actor.root.position.y
 		# he carries a pistol as well; _update_actors holsters it while he is loaded up
 		thief_actor.attach_weapon()
+		thief_actor.attach_kit()
 		thief_actor.set_weapon("pistol")
 
 	# a separate body so bullet rays can tell the thief from the scenery.
@@ -1052,6 +1053,8 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 	# drawn one always could.
 	thief_actor.set_weapon("pistol" if (thief["alive"] and thief["carry"] == "") else "none")
 	thief_actor.update_weapon(_thief_aim(tp, sees))
+	# after update_weapon, because the kit follows bones the animation has just written
+	thief_actor.update_kit()
 
 	if not thief["alive"]:
 		if thief_actor.has_clip(Actor.DEATH):
