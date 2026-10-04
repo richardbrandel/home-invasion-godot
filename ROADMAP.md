@@ -2,6 +2,11 @@
 
 ## Progress
 
+- **The police clock — DONE** (2026-10-04). A gunshot starts a 110 s countdown; when it runs
+  out he hears sirens and leaves with whatever he has. Deliberately not a win — noise cuts a
+  robbery short, it does not stop it. Synthesised siren from the street, HUD countdown, six
+  new tests, verified live (`POLICE 1:36` at 14 s elapsed).
+
 - **Searching — DONE** (2026-10-04). He no longer knows where the valuables are: an item is
   unknown until he has stood in its room, each room is searched once, and the kitchen is a
   deliberate decoy that holds nothing. Heist 7/7 at ~137 s (was ~126). Seven new tests.
