@@ -153,6 +153,40 @@ func _init() -> void:
 		closest >= body_gap - 1e-3,
 		"closest approach %.3f m, want >= %.3f" % [closest, body_gap])
 
+	# ---- the OTHER direction, and the one a player actually notices: the
+	# HOMEOWNER walking into the intruder. game.gd moves the player from input and
+	# only then calls step_thief, so separation has to survive a player actively
+	# driving into him. The heist check above only ever had the player standing
+	# still, which is why this case went unverified.
+	player = Sim.create_player()
+	thief = Sim.create_thief()
+	loot = Sim.create_loot()
+	events = []
+	for l in loot:
+		l["taken"] = true          # nothing left to steal, so he holds position
+	thief["pos"] = Vector2(0, 0)
+	thief["prev"] = Vector2(0, 0)
+	thief["route"] = []
+	thief["target"] = ""
+	player["pos"] = Vector2(0, -4)
+	var worst := INF
+	var shove_z := 0.0
+	for i in 60 * 6:
+		# exactly what game.gd does: move from input, then hand over to step_thief
+		var p: Vector2 = player["pos"] + Vector2(0, 1) * Sim.PLAYER_SPEED * dt
+		p = Sim.resolve_circle(p, Sim.PLAYER_RADIUS)
+		p = Sim.clamp_to_world(p, Sim.PLAYER_RADIUS)
+		player["pos"] = p
+		Sim.step_thief(thief, player, loot, events, dt)
+		events.clear()
+		worst = minf(worst, (thief["pos"] as Vector2).distance_to(player["pos"]))
+		shove_z = maxf(shove_z, (thief["pos"] as Vector2).y)
+	check("the homeowner cannot walk into the intruder",
+		worst >= body_gap - 1e-3,
+		"closest %.3f m, want >= %.3f" % [worst, body_gap])
+	check("the intruder is actually shoved rather than stood inside",
+		shove_z > 1.0, "he ended up at z=%.2f, started at 0" % shove_z)
+
 	# ---- thief stays in bounds
 	player = Sim.create_player()
 	thief = Sim.create_thief()
