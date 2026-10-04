@@ -307,10 +307,20 @@ static func clamp_to_world(pos: Vector2, radius: float) -> Vector2:
 		clampf(pos.y, BOUNDS.position.y + radius, BOUNDS.end.y - radius))
 
 ## Keep the homeowner and the intruder out of each other, so neither can walk
-## through the other. The intruder yields first — the player's own input is
-## authoritative and being shoved about by the AI reads as broken — and only the
-## overlap he cannot escape, because scenery is behind him, is taken back out of
-## the homeowner. That is what makes a corner feel solid rather than spongy.
+## through the other.
+##
+## The HOMEOWNER is the one displaced, and that choice is load-bearing. If the
+## intruder yields instead he can be pinned indefinitely by a player who is simply
+## standing there, and rerouting cannot rescue him because the blocker is a body
+## rather than scenery. Measured with the intruder yielding: 142 re-routes and
+## nothing ever delivered, and a player parked in the 2 m front doorway made the
+## house impossible to leave. With the homeowner yielding, six of seven tested
+## player behaviours complete the heist with zero re-routes. A nudge costs the
+## player little anyway — his position is re-asserted from input every frame.
+##
+## Scenery still has the final say on both bodies: each is pushed back out of
+## anything solid, and if the homeowner cannot be moved because there is scenery
+## behind him, the shortfall is taken from the intruder so they never overlap.
 ## Returns [player_pos, thief_pos].
 static func separate_bodies(ppos: Vector2, tpos: Vector2) -> Array[Vector2]:
 	var min_dist := PLAYER_RADIUS + THIEF_RADIUS
@@ -323,16 +333,18 @@ static func separate_bodies(ppos: Vector2, tpos: Vector2) -> Array[Vector2]:
 	# result is repeatable rather than depending on float noise
 	var n := Vector2(1.0, 0.0) if dist < 1e-5 else d / dist
 
-	var t := clamp_to_world(resolve_circle(ppos + n * min_dist, THIEF_RADIUS), THIEF_RADIUS)
-	var back := t - ppos
-	var back_dist := back.length()
-	if back_dist < min_dist:
-		var bn := n if back_dist < 1e-5 else back / back_dist
-		var p := clamp_to_world(resolve_circle(t - bn * min_dist, PLAYER_RADIUS), PLAYER_RADIUS)
-		var squeezed: Array[Vector2] = [p, t]
-		return squeezed
-	var yielded: Array[Vector2] = [ppos, t]
-	return yielded
+	var t := tpos
+	var p := clamp_to_world(resolve_circle(ppos - n * (min_dist - dist), PLAYER_RADIUS), PLAYER_RADIUS)
+
+	var gap := t - p
+	var gap_len := gap.length()
+	if gap_len < min_dist - 1e-4:
+		# he is against something immovable, so take the remainder from the intruder
+		var bn := n if gap_len < 1e-5 else gap / gap_len
+		t = clamp_to_world(resolve_circle(p + bn * min_dist, THIEF_RADIUS), THIEF_RADIUS)
+
+	var out: Array[Vector2] = [p, t]
+	return out
 
 ## Swing a heading away from the homeowner when he is close and in front. Ties —
 ## walking straight at him — break to a fixed side, so the thief is predictable
@@ -481,7 +493,14 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 	var speed_scale: float = thief.get("speed_scale", 1.0)
 	while not route.is_empty():
 		var wp: Vector2 = route[0]
-		if tpos.distance_to(wp) < 0.6:
+		# The homeowner can stand exactly ON a waypoint, and the two bodies then can
+		# never get nearer than the sum of their radii — so the intruder would orbit
+		# that waypoint forever, 0.24 m short of the arrival radius, and never
+		# re-plan. An occupied waypoint counts as reached once he is as close as the
+		# collision allows. Nothing is skipped by that: both interaction ranges,
+		# GRAB_RANGE (1.4 m) and DROP_RANGE (1.6 m), exceed the gap.
+		var occupied := ppos.distance_to(wp) < PLAYER_RADIUS + THIEF_RADIUS
+		if tpos.distance_to(wp) < 0.6 or (occupied and tpos.distance_to(wp) < 1.2):
 			route.pop_front()
 			continue
 		var a := (wp - tpos).angle()

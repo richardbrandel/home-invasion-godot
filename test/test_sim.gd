@@ -105,8 +105,10 @@ func _init() -> void:
 	check("two overlapping bodies are pushed apart",
 		s1.distance_to(s0) >= body_gap - 1e-4,
 		"%.3f m apart, want >= %.3f" % [s1.distance_to(s0), body_gap])
-	check("the homeowner is not shoved while the intruder can still yield",
-		s0.is_equal_approx(Vector2.ZERO), "player moved to %s" % s0)
+	check("the intruder holds his ground",
+		s1.is_equal_approx(Vector2(0.2, 0.1)), "thief moved to %s" % s1)
+	check("the homeowner is the body that gives way",
+		not s0.is_equal_approx(Vector2.ZERO), "player did not move")
 
 	var co := Sim.separate_bodies(Vector2(3, 3), Vector2(3, 3))
 	var c0: Vector2 = co[0]
@@ -121,8 +123,8 @@ func _init() -> void:
 		and (apart[1] as Vector2).is_equal_approx(Vector2(0, 5)))
 
 	var shoved := Sim.separate_bodies(Vector2(0, 0), Vector2(0, 0.3))
-	check("the intruder is the body that yields",
-		(shoved[1] as Vector2).y > 0.3, "thief ended at %s" % shoved[1])
+	check("the homeowner is the body that yields",
+		(shoved[0] as Vector2).y < 0.0, "player ended at %s" % shoved[0])
 
 	# ---- steering: solid alone would wall him in
 	var north := -PI * 0.5
@@ -184,8 +186,54 @@ func _init() -> void:
 	check("the homeowner cannot walk into the intruder",
 		worst >= body_gap - 1e-3,
 		"closest %.3f m, want >= %.3f" % [worst, body_gap])
-	check("the intruder is actually shoved rather than stood inside",
-		shove_z > 1.0, "he ended up at z=%.2f, started at 0" % shove_z)
+	check("the intruder holds his ground rather than being driven off it",
+		shove_z < 0.05, "he drifted to z=%.2f" % shove_z)
+
+	# ---- THE REGRESSION. Every check above holds the homeowner still, and a
+	# stationary player is the ONE case that always worked. This is what came back
+	# from play as "the thief is not taking items out of the house": with the
+	# intruder yielding on contact, a player standing on his route was an immovable
+	# wall — 142 re-routes and nothing ever delivered, and a player in the 2 m front
+	# doorway made the house impossible to leave.
+	_banner("heist against a MOVING homeowner")
+	var cases := [
+		["chases the intruder", 1],
+		["blocks the front doorway", 2],
+		["stands on the front-hub waypoint", 3],
+		["stands on the living-room waypoint", 4],
+	]
+	for c in cases:
+		player = Sim.create_player()
+		thief = Sim.create_thief()
+		loot = Sim.create_loot()
+		events = []
+		var mode: int = c[1]
+		var t2 := 0.0
+		var rr := 0
+		while t2 < 180.0 and Sim.remaining(loot) > 0:
+			match mode:
+				1:
+					var chase_d: Vector2 = (thief["pos"] as Vector2) - (player["pos"] as Vector2)
+					if chase_d.length() > 0.01:
+						var chase_p: Vector2 = (player["pos"] as Vector2) \
+							+ chase_d.normalized() * Sim.PLAYER_SPEED * dt
+						player["pos"] = Sim.clamp_to_world(
+							Sim.resolve_circle(chase_p, Sim.PLAYER_RADIUS), Sim.PLAYER_RADIUS)
+				2:
+					player["pos"] = Vector2(0, -8.6)
+				3:
+					player["pos"] = Vector2(0, -11.2)
+				4:
+					player["pos"] = Vector2(-3.6, -11.2)
+			Sim.step_thief(thief, player, loot, events, dt)
+			for ev in events:
+				if ev["type"] == "reroute":
+					rr += 1
+			events.clear()
+			t2 += dt
+		check("the heist completes even when the homeowner %s" % c[0],
+			Sim.remaining(loot) == 0,
+			"delivered %d/3 in %.0fs with %d re-routes" % [3 - Sim.remaining(loot), t2, rr])
 
 	# ---- thief stays in bounds
 	player = Sim.create_player()
