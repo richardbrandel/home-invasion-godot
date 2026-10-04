@@ -247,15 +247,40 @@ func _init() -> void:
 		thief["cd"] = 0.0
 		thief["mag"] = 8
 		thief["reloading"] = 0.0
+		var fired := false
+		# long enough to clear both the aim settle and the first cooldown
+		for i in 60 * 3:
+			events = []
+			Sim.step_thief(thief, player, loot, events, dt)
+			for ev in events:
+				if ev["type"] == "thiefShot":
+					fired = true
+		check("does NOT fire while carrying the loot" if carrying else "fires when his hands are free",
+			fired != carrying, "fired=%s carrying=%s" % [fired, carrying])
+
+	# ---- and he has to settle on you first
+	_banner("the intruder must aim before firing")
+	player = Sim.create_player()
+	thief = Sim.create_thief()
+	loot = Sim.create_loot()
+	thief["pos"] = (player["pos"] as Vector2) + Vector2(0, 2.0)
+	thief["prev"] = thief["pos"]
+	thief["cd"] = 0.0
+	thief["mag"] = 8
+	var first_shot := -1.0
+	var t3 := 0.0
+	while t3 < 3.0 and first_shot < 0.0:
 		events = []
 		Sim.step_thief(thief, player, loot, events, dt)
-		var fired := false
 		for ev in events:
 			if ev["type"] == "thiefShot":
-				fired = true
-		check("does NOT fire while carrying the loot" if carrying else "fires when his hands are free",
-			fired != carrying,
-			"fired=%s carrying=%s" % [fired, carrying])
+				first_shot = t3
+		t3 += dt
+	check("the intruder does not fire the instant he sees you",
+		first_shot >= Sim.THIEF_AIM_TIME - dt,
+		"first shot at %.2fs, aim time is %.2fs" % [first_shot, Sim.THIEF_AIM_TIME])
+	check("but he does fire once he has settled",
+		first_shot >= 0.0 and first_shot < 1.5, "first shot at %.2fs" % first_shot)
 
 	# ---- thief stays in bounds
 	player = Sim.create_player()

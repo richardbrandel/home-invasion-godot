@@ -122,6 +122,13 @@ const THIEF_SIGHT := 26.0
 const THIEF_FIRE_HUNTING := 1.35
 const THIEF_MAG := 8
 const THIEF_RELOAD := 1.5
+## Continuous line of sight he needs before he can fire.
+##
+## Without it he shot on the exact frame you first became visible, so merely glimpsing
+## him cost health instantly — and because the tracer is drawn from him to you, what you
+## saw was a line arriving through the wall you had just ducked behind. He still fires
+## at the same cadence; he just has to settle on you first, the way a person would.
+const THIEF_AIM_TIME := 0.45
 const GRAB_RANGE := 1.4
 const DROP_RANGE := 1.6
 
@@ -413,7 +420,7 @@ static func create_thief() -> Dictionary:
 		"hp": float(THIEF_HEALTH), "alive": true,
 		"mag": THIEF_MAG, "cd": 1.2, "reloading": 0.0, "think": 2.0,
 		"carry": "", "target": "", "route": [], "mode": "hunt",
-		"stuck_t": 0.0,
+		"stuck_t": 0.0, "aim": 0.0,
 	}
 
 static func create_loot() -> Array[Dictionary]:
@@ -538,14 +545,19 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 		thief["route"] = route_to(nearest_node(tpos), back)
 		events.append({"type": "reroute"})
 
-	# ---- shoot. Sight is recomputed AFTER moving: the thief can step behind
+	# ---- aim, then shoot. Sight is recomputed AFTER moving: the thief can step behind
 	# cover during this same step, and firing through a wall would be a bug.
 	var can: bool = player["alive"] and \
 		tpos.distance_to(ppos) < THIEF_SIGHT and not los_blocked(tpos, ppos)
+	if can:
+		thief["aim"] = minf(thief["aim"] + dt, THIEF_AIM_TIME)
+	else:
+		thief["aim"] = 0.0
+
 	# He cannot fire with his hands full — one hand is on the loot, which is the whole
-	# point of the trip. This is the rule that matches the pistol being holstered while
-	# he carries. `can` still means line of sight, not permission to shoot.
-	var may_fire: bool = can and thief["carry"] == ""
+	# point of the trip. This matches the pistol being holstered while he carries.
+	# `can` still means line of sight, not permission to shoot.
+	var may_fire: bool = can and thief["carry"] == "" and thief["aim"] >= THIEF_AIM_TIME
 	if may_fire and thief["reloading"] <= 0.0 and thief["cd"] <= 0.0:
 		if thief["mag"] <= 0:
 			thief["reloading"] = THIEF_RELOAD

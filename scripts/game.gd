@@ -558,9 +558,23 @@ func _drain_events() -> void:
 	for ev in events:
 		match ev["type"]:
 			"thiefShot":
-				_add_tracer(Vector3(thief["pos"].x, 1.3, thief["pos"].y),
-					Vector3(player["pos"].x, 1.3, player["pos"].y))
-				Sim.damage_player(player, Sim.THIEF_DAMAGE, events)
+				var shot_from := Vector3(thief["pos"].x, 1.3, thief["pos"].y)
+				var shot_to := Vector3(player["pos"].x, 1.3, player["pos"].y)
+				# His shots are NOT guaranteed. Every event has always carried a spread
+				# that nothing ever read, so 100% of them hit — unlike the player's own
+				# weapons, which scatter. Accuracy now falls off with range, so a hit is
+				# earned rather than looking like he fired through whatever you ducked
+				# behind. Resolved here rather than in sim.gd so the sim stays pure and
+				# its tests stay deterministic.
+				var range_m := shot_from.distance_to(shot_to)
+				if randf() <= clampf(1.0 - range_m * 0.02, 0.55, 1.0):
+					_add_tracer(shot_from, shot_to)
+					Sim.damage_player(player, Sim.THIEF_DAMAGE, events)
+				else:
+					# it goes wide: end the tracer off to one side instead of on you
+					var wide := Vector3(randf_range(-1.0, 1.0), randf_range(-0.5, 0.5),
+						randf_range(-1.0, 1.0)).normalized()
+					_add_tracer(shot_from, shot_to + wide * 1.4)
 			"grabbed":
 				msg = "They grabbed the %s!" % ev["label"]
 				msg_t = 1.8
