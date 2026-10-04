@@ -59,9 +59,31 @@ const AIM_SENS_Y := 0.0018
 const PITCH_MIN := -0.30        # looking up
 const PITCH_MAX := 0.85         # looking down
 
-var aim_cone := true
+## Camera offset behind and above the homeowner's eye. At zero the camera is inside his
+## head and he must be hidden; pulled back he is drawn, which is what Richard asked for.
+##
+## A foot is very close: at 0.30 m his head is 0.22 m wide and subtends about 40 degrees,
+## which is more than half the width of the screen. CAM_BACK is the value that actually
+## reads, and it is a single number to tune.
+const CAM_BACK := 0.90
+## Ceiling on the lift, and it is a gameplay limit rather than a taste one: the walls are
+## 2.0 m and the eye is 1.65 m, so much above +0.25 m the camera rises over the walls and
+## the house becomes a dollhouse — you see the intruder over cover the minimap hides.
+const CAM_UP := 0.22
+## Sideways offset. A gun held in front of the body is hidden by the body from directly
+## behind, so seeing the weapon at all needs the camera off his shoulder.
+const CAM_SIDE := 0.42
+## Below this camera-to-eye distance the model is hidden. A long boom in a small house
+## jams against the wall behind constantly, and a jammed camera sits inside his back.
+const CAM_FADE := 0.42
+
+var aim_cone := false
 var aim_yaw := 0.0
 var aim_pitch := 0.0
+## Live camera offset, so the distance can be tuned without a code edit.
+var cam_back := CAM_BACK
+var cam_up := CAM_UP
+var cam_side := CAM_SIDE
 
 var _lbl_hp: Label
 var _lbl_weapon: Label
@@ -144,6 +166,12 @@ func _ready() -> void:
 		# force the fallback scheme, so "does reverting still work" is checkable
 		if a == "--aim=fixed":
 			aim_cone = false
+		if a.begins_with("--cam-back="):
+			cam_back = float(a.substr(11))
+		if a.begins_with("--cam-up="):
+			cam_up = float(a.substr(9))
+		if a.begins_with("--cam-side="):
+			cam_side = float(a.substr(11))
 
 
 # ------------------------------------------------------------- environment
@@ -586,7 +614,10 @@ func _process(delta: float) -> void:
 	# switch survives a round reset.
 	if player_actor != null and player_actor.root != null:
 		player_actor.set_weapon(player["weapon"] if player["alive"] else "none")
-		player_actor.update_viewmodel(cam, _aim_dir())
+		# Back in his hand: the camera is behind him now, so the animated hand is in frame,
+		# and a gun floating in mid-air beside his shoulder reads as detached once you can
+		# actually see him. update_weapon points it along the aim from the hand bone.
+		player_actor.update_weapon(_aim_dir())
 	_update_crosshair()
 	_update_tracers(delta)
 	_draw_minimap()
@@ -693,12 +724,6 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 	player_actor.root.position = Vector3(player["pos"].x,
 		player_actor.ground_offset * (sy / base), player["pos"].y)
 	player_actor.root.rotation.y = yaw
-	# First person, so the homeowner's own model is never drawn: the camera is inside
-	# his head, and without this you look at the inside of his skull. The weapon is not
-	# a child of this node (see Actor.attach_weapon), which is why hiding it does not
-	# also hide the gun.
-	player_actor.root.visible = false
-
 	# Cone mode: walking turns the body toward wherever you are aiming, so the view
 	# catches up on its own and you are never stuck aiming sideways down a corridor.
 	if aim_cone and playing and player_moving and aim_yaw != 0.0:
@@ -721,7 +746,12 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 		var ms := Sim.PLAYER_SPRINT_SPEED if player["sprinting"] else Sim.PLAYER_SPEED
 		player_actor.play(Actor.RUN, _clip_speed(player_actor, Actor.RUN, ms))
 	else:
-		player_actor.play(Actor.IDLE)
+		# AIM, not IDLE. The homeowner is armed and the camera is behind him now: in the
+		# idle clip his arms hang at his sides, so the pistol sat at his hip and his own
+		# body hid it completely. The aim pose holds it out where it can be seen, which is
+		# also how a person stands with a weapon ready. Safe to play because
+		# _strip_to_upper_body() removes the hips, so it no longer swivels him.
+		player_actor.play(Actor.AIM)
 
 	# ---- thief
 	thief_actor.tick(delta)
@@ -778,7 +808,27 @@ func _update_camera() -> void:
 	var p: Vector2 = player["pos"]
 	# the BODY, not the aim: in cone mode the view deliberately does not follow the mouse
 	var view := _view_dir()
-	cam.position = Vector3(p.x, eye, p.y)
+	var pivot := Vector3(p.x, eye, p.y)
+	var right := Vector3(-cos(yaw), 0.0, sin(yaw))
+	var desired := pivot - view * cam_back + Vector3.UP * cam_up + right * cam_side
+
+	# Pull in if the wall behind would swallow the camera. Short, but in a house with
+	# walls every few metres this fires constantly — which is why the model below fades
+	# out rather than leaving you staring at the inside of his back.
+	var space := get_world_3d().direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(pivot, desired)
+	q.collision_mask = LAYER_WORLD
+	var hit := space.intersect_ray(q)
+	if not hit.is_empty():
+		desired = (hit["position"] as Vector3) + (pivot - desired).normalized() * 0.14
+
+	if player_actor != null and player_actor.root != null:
+		# _shot_hide_player has to be honoured here rather than in the shot block, because
+		# this runs later every frame and would simply turn him back on.
+		player_actor.root.visible = player["alive"] and not _shot_hide_player \
+			and desired.distance_to(pivot) > CAM_FADE
+
+	cam.position = desired
 	cam.look_at(cam.position + view * 20.0, Vector3.UP)
 
 
@@ -816,10 +866,19 @@ func _fire() -> void:
 	if player_actor != null:
 		player_actor.play_once(Actor.SHOOT)
 
-	var eye := Sim.CROUCH_EYE_HEIGHT if player["crouching"] else Sim.EYE_HEIGHT
-	var origin := Vector3(player["pos"].x, eye, player["pos"].y)
-	var aim_point := cam.global_position + _aim_dir() * 100.0
-	var base_dir := (aim_point - origin).normalized()
+	# The ray starts at the CAMERA, not the eye. With the camera pulled back behind the
+	# homeowner those are different points, and casting from the eye while the crosshair
+	# sits on the camera's forward is precisely the mismatch that put shots 0.6 m left and
+	# 0.3 m low before. From the camera the crosshair is honest by construction, whatever
+	# the camera offset happens to be.
+	var origin := cam.global_position
+	var base_dir := _aim_dir()
+	# the tracer is drawn from the gun even though the ray is cast from the camera
+	var muzzle: Vector3 = origin
+	if player_actor != null:
+		var m := player_actor.muzzle()
+		if m != Vector3.ZERO:
+			muzzle = m
 
 	var space := get_world_3d().direct_space_state
 	for i in int(spec["pellets"]):
@@ -839,7 +898,7 @@ func _fire() -> void:
 			var collider = hit["collider"]
 			if collider is Node and collider.name == "ThiefHitbox" and thief["alive"]:
 				Sim.damage_thief(thief, spec["dmg"], events)
-		_add_tracer(origin, end)
+		_add_tracer(muzzle, end)
 	_drain_events()
 
 	if player["mag"] <= 0:

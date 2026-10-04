@@ -379,61 +379,14 @@ func attach_weapon() -> void:
 	_pistol.visible = true
 
 
-## The first-person weapon is drawn smaller than the one the intruder holds. That is
-## normal for a viewmodel and invisible to the player, but it matters here: at world
-## scale and this distance the pistol still covered the lower right of the frame.
-const VIEWMODEL_SCALE := 0.75
-## How far the gun slides toward the aim, in metres per unit of tangent. Roughly the swing
-## of a real arm at this distance; 0 pins the gun in place and only turns it.
-const VIEWMODEL_SWING := 0.42
-
-
-## First-person viewmodel placement.
-##
-## In third person the prop rides the animated right hand, which sits about 0.45 m below
-## the eye. With the camera now at the eye that is roughly 56 degrees off axis — far
-## outside a 68 degree frame — so the gun vanished completely. A first-person weapon is
-## normally presented at a fixed offset in front of the camera instead. The basis is
-## built exactly as update_weapon() builds it, so the prop looks identical either way.
-##
-## Must be called AFTER the camera moves, or the gun trails the view by a frame.
-func update_viewmodel(cam: Camera3D, aim_dir: Vector3) -> void:
-	if _holder == null or cam == null:
-		return
-	# Position is fixed in camera space; only the orientation follows the aim. That is
-	# what makes the gun visibly swing across the screen in cone mode instead of staying
-	# welded to one spot.
-	var cf := -cam.global_transform.basis.z
-	var cu := Vector3.UP
-	if absf(cf.dot(cu)) > 0.98:
-		cu = Vector3.RIGHT
-	var cright := cf.cross(cu).normalized()
-	var cup := cright.cross(cf).normalized()
-	# Held low and to the right, pushed out to 0.58 m. At 0.36 m the grip sat 0.26 m from
-	# the eye and covered a third of the screen.
-	var origin := cam.global_position + cright * 0.20 + cup * -0.15 + cf * 0.58
-
-	var fwd := aim_dir
-	if fwd.length() < 0.001:
-		fwd = cf
-	fwd = fwd.normalized()
-
-	# Swing the gun toward the aim as well as turning it, which is what an arm actually
-	# does: aiming 20 degrees off the body moves the hand, not just the wrist. Without
-	# this the gun only rotated about its grip and barely travelled on screen, so cone mode
-	# looked like nothing was happening.
-	var cz := maxf(fwd.dot(cf), 0.15)
-	origin += cright * (fwd.dot(cright) / cz * VIEWMODEL_SWING) \
-		+ cup * (fwd.dot(cup) / cz * VIEWMODEL_SWING)
-
-	var world_up := Vector3.UP
-	if absf(fwd.dot(world_up)) > 0.98:
-		world_up = Vector3.RIGHT
-	var right := fwd.cross(world_up).normalized()
-	var real_up := right.cross(fwd).normalized()
-	var b := Basis(right, real_up, fwd).scaled(Vector3(VIEWMODEL_SCALE, VIEWMODEL_SCALE,
-		VIEWMODEL_SCALE))
-	_holder.global_transform = Transform3D(b, origin)
+## World position of the muzzle, so a tracer can be drawn out of the gun rather than out
+## of the camera. This is drawing only — the shot ray itself is cast from the camera so
+## that the crosshair stays honest (see game.gd _fire).
+func muzzle() -> Vector3:
+	if _holder == null:
+		return Vector3.ZERO
+	var t := _holder.global_transform
+	return t.origin + t.basis.z * 0.40
 
 
 ## Called every frame with the direction the player is aiming.
