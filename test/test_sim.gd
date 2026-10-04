@@ -624,6 +624,7 @@ func _init() -> void:
 	check("a laden intruder has no hands free to grab you",
 		not Sim.thief_shove(thief, player, events), "carrying the %s" % thief["carry"])
 
+
 	# ---- thief stays in bounds
 	player = Sim.create_player()
 	thief = Sim.create_thief()

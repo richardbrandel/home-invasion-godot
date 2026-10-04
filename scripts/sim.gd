@@ -573,15 +573,7 @@ static func shove(player: Dictionary, thief: Dictionary, loot: Array, events: Ar
 	thief["regrab"] = REGRAB_TIME
 
 	var dropped := String(thief["carry"])
-	if dropped != "":
-		for l in loot:
-			if String(l["label"]) == dropped:
-				# back into the world where he was standing — and he knows where it is
-				l["taken"] = false
-				l["delivered"] = false
-				l["pos"] = thief["pos"]
-				l["known"] = true
-		thief["carry"] = ""
+	drop_carried(thief, loot, events)
 	events.append({"type": "shoved", "dropped": dropped})
 	return true
 
@@ -592,6 +584,22 @@ static func shove(player: Dictionary, thief: Dictionary, loot: Array, events: Ar
 ## to grab you was LESS dangerous than one across the room and walking into him was the
 ## correct play. It knocks you back, spoils your aim, and stops you firing for a moment.
 ## He will not do it while carrying anything — his hands are full.
+## Put whatever he is carrying back into the world at his feet, and make him stoop for it.
+static func drop_carried(thief: Dictionary, loot: Array, events: Array) -> void:
+	var dropped := String(thief["carry"])
+	if dropped == "":
+		return
+	for l in loot:
+		if String(l["label"]) == dropped:
+			l["taken"] = false
+			l["delivered"] = false
+			l["pos"] = thief["pos"]
+			l["known"] = true
+	thief["carry"] = ""
+	thief["regrab"] = REGRAB_TIME
+	events.append({"type": "dropped", "label": dropped})
+
+
 static func thief_shove(thief: Dictionary, player: Dictionary, events: Array) -> bool:
 	if not thief["alive"] or bool(thief.get("escaped", false)):
 		return false
@@ -867,9 +875,13 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 	else:
 		thief["aim"] = 0.0
 
-	# He cannot fire with his hands full — one hand is on the loot, which is the whole
-	# point of the trip. This matches the pistol being holstered while he carries.
-	# `can` still means line of sight, not permission to shoot.
+	# He cannot fire with his hands full — one hand is on the loot, which is the whole point
+	# of the trip. The audit calls this the opposite of realistic and it is, but making him
+	# drop the loot whenever the homeowner is close and in view was MEASURED and reverted: an
+	# idle homeowner sits on his route, so the drop fires constantly and he delivers nothing.
+	# Firing one-handed would need the pistol and a two-handed item in the same hand. It stays
+	# a deliberate exception, and it is what makes the loot his vulnerability. `can` still
+	# means line of sight, not permission to shoot.
 	var may_fire: bool = can and thief["carry"] == "" and thief["aim"] >= THIEF_AIM_TIME
 	if may_fire and thief["reloading"] <= 0.0 and thief["cd"] <= 0.0:
 		if thief["mag"] <= 0:
