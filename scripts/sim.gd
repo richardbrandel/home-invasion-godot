@@ -156,6 +156,12 @@ const FEAR_FLEE := 4.0
 const FEAR_DECAY := 0.18
 const FEAR_PER_SHOT := 0.7
 const FEAR_PER_HIT := 2.0
+## The rooms worth searching. `opening`, `frontHub`, `doorIn` and `doorOut` are corridors,
+## not places anything is kept. Note `kitchen` is on the list and holds NOTHING: searching
+## has to be able to come up empty, or it is not searching.
+const SEARCH_NODES := ["living", "kitchen", "bedroom", "study"]
+const SEARCH_TIME := 1.5      # seconds spent looking around a room
+const SEARCH_RANGE := 1.2     # how close he has to be to search it
 
 
 ## Tell him he is being shot at. Called by the game when the homeowner fires; `loudness`
@@ -506,13 +512,14 @@ static func create_thief() -> Dictionary:
 		"carry": "", "target": "", "route": [], "mode": "hunt",
 		"stuck_t": 0.0, "aim": 0.0, "stagger": 0.0, "hits": 0,
 		"fear": 0.0, "escaped": false, "last_seen": Vector2.ZERO, "speed": 0.0,
+		"searched": [],
 	}
 
 static func create_loot() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	for s in LOOT_SPOTS:
 		out.append({"pos": s["pos"], "label": s["label"], "node": s["node"],
-			"taken": false, "delivered": false})
+			"taken": false, "delivered": false, "known": false})
 	return out
 
 static func remaining(loot: Array) -> int:
@@ -573,21 +580,23 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 			if remaining(loot) == 0:
 				events.append({"type": "allStolen"})
 	else:
-		var avail: Array = []
+		# What does he actually KNOW about? He used to know all three valuables and their
+		# exact coordinates from the moment he spawned, which is not a burglary, it is a
+		# shopping list. Now an item is unknown until he has stood in the room it is in.
+		var known: Array = []
 		for l in loot:
-			if not l["delivered"] and not l["taken"]:
-				avail.append(l)
-		if avail.is_empty():
-			thief["mode"] = "idle"
-		else:
+			if not l["delivered"] and not l["taken"] and bool(l.get("known", false)):
+				known.append(l)
+		if not known.is_empty():
 			thief["mode"] = "hunt"
 			var tgt: Dictionary = {}
 			for l in loot:
 				if l["label"] == thief["target"]:
 					tgt = l
-			if tgt.is_empty() or tgt["delivered"] or tgt["taken"]:
-				var best: Dictionary = avail[0]
-				for l in avail:
+			if tgt.is_empty() or not bool(tgt.get("known", false)) \
+					or tgt["delivered"] or tgt["taken"]:
+				var best: Dictionary = known[0]
+				for l in known:
 					if tpos.distance_to(l["pos"]) < tpos.distance_to(best["pos"]):
 						best = l
 				thief["target"] = best["label"]
@@ -600,6 +609,35 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 				events.append({"type": "grabbed", "label": tgt["label"]})
 				thief["route"] = []
 				thief["target"] = ""
+		else:
+			# nothing known: go and look in a room. Nearest unsearched first, which is
+			# what a person does — he does not cross the house to a far room while an
+			# unexplored one is behind him.
+			var rooms: Array = []
+			for n in SEARCH_NODES:
+				if not (thief["searched"] as Array).has(n):
+					rooms.append(n)
+			if rooms.is_empty():
+				thief["mode"] = "idle"
+			else:
+				thief["mode"] = "search"
+				var room: String = String(rooms[0])
+				for n in rooms:
+					if tpos.distance_to(NODES[n]["pos"]) \
+							< tpos.distance_to(NODES[room]["pos"]):
+						room = String(n)
+				if thief["target"] != room:
+					thief["target"] = room
+					thief["route"] = route_to(nearest_node(tpos), room)
+				if tpos.distance_to(NODES[room]["pos"]) < SEARCH_RANGE:
+					# dwell here while he looks, then anything in this room is known
+					thief["think"] = SEARCH_TIME
+					(thief["searched"] as Array).append(room)
+					thief["route"] = []
+					thief["target"] = ""
+					for l in loot:
+						if String(l["node"]) == room and not l["delivered"]:
+							l["known"] = true
 
 	# ---- move
 	#

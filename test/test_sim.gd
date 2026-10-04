@@ -430,6 +430,54 @@ func _init() -> void:
 		"shotgun mag %d, pistol mag remembered as %d"
 			% [player["mag"], player["mags"]["pistol"]])
 
+	# ---- he has to FIND the valuables; he does not know where they are
+	_banner("searching")
+	player = Sim.create_player()
+	thief = Sim.create_thief()
+	loot = Sim.create_loot()
+	check("he spawns knowing where nothing is",
+		not bool(loot[0]["known"]) and not bool(loot[1]["known"])
+			and not bool(loot[2]["known"]), "all three unknown")
+	check("and having searched no rooms",
+		(thief["searched"] as Array).is_empty(), "searched=[]")
+	thief["think"] = 0.0
+	events = []
+	Sim.step_thief(thief, player, loot, events, dt)
+	check("so his first move is to go and look, not to a known coordinate",
+		String(thief["mode"]) == "search", "mode=%s" % thief["mode"])
+
+	# stand him in the living room and let him look around
+	thief["pos"] = Sim.NODES["living"]["pos"]
+	thief["prev"] = thief["pos"]
+	thief["think"] = 0.0
+	events = []
+	Sim.step_thief(thief, player, loot, events, dt)
+	check("standing in the living room finds the TV",
+		bool(loot[0]["known"]) and (thief["searched"] as Array).has("living"),
+		"tv known=%s, searched=%s" % [loot[0]["known"], thief["searched"]])
+	check("and it does NOT reveal what is in the study",
+		not bool(loot[1]["known"]) and not bool(loot[2]["known"]),
+		"laptop=%s safe=%s" % [loot[1]["known"], loot[2]["known"]])
+
+	# the kitchen holds nothing, and searching has to be able to come up empty
+	thief = Sim.create_thief()
+	loot = Sim.create_loot()
+	thief["pos"] = Sim.NODES["kitchen"]["pos"]
+	thief["prev"] = thief["pos"]
+	thief["think"] = 0.0
+	events = []
+	Sim.step_thief(thief, player, loot, events, dt)
+	var found_any := false
+	for l in loot:
+		if bool(l["known"]):
+			found_any = true
+	check("searching the kitchen, which is empty, finds nothing",
+		not found_any and (thief["searched"] as Array).has("kitchen"),
+		"searched=%s, anything found=%s" % [thief["searched"], found_any])
+	check("and he does not search the same room twice",
+		(thief["searched"] as Array).count("kitchen") == 1,
+		"kitchen appears %d times" % (thief["searched"] as Array).count("kitchen"))
+
 	# ---- thief stays in bounds
 	player = Sim.create_player()
 	thief = Sim.create_thief()
