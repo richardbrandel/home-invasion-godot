@@ -16,6 +16,12 @@ const SCALE := 0.5
 ## The city vehicles are authored at roughly 1x, not the 2x of the other KayKit sets,
 ## so they need their own multiplier on top of SCALE or they come out toy-sized.
 const VAN_SCALE := 2.5
+## The city set is authored at roughly 1x, like the vehicles, so anything else taken from
+## it needs the same multiplier rather than the 0.5 used for the restaurant and characters.
+const CITY_SCALE := 2.5
+## How far to sink the city road tiles so their running surface sits on the lawn rather
+## than on top of their own raised base.
+const ROAD_SINK := 0.22
 const A := "res://assets/kaykit/"
 
 # KayKit's modular wall panel is 4.00 x 4.00 x 0.50 m at source scale.
@@ -423,10 +429,61 @@ static func build_exterior(parent: Node3D) -> void:
 
 static func build_all(parent: Node3D) -> void:
 	build_exterior(parent)
+	build_neighbourhood(parent)
 	build_floors(parent)
 	build_walls(parent)
 	build_ceiling(parent)
 	build_furniture(parent)
+
+
+## The street and the houses around it.
+##
+## The world outside was a 160x160 m lawn with a driveway on it. The pack ships eight
+## buildings, road pieces, benches, a hydrant, a dumpster and traffic lights — all
+## imported, all unplaced — so the "neighbourhood" was six bushes and three streetlights,
+## which is why the house looked like it was standing alone on an empty plane.
+##
+## Scenery only: none of it enters Sim.SOLIDS and none of it has collision, so it changes
+## what the front door looks out at and nothing else.
+static func build_neighbourhood(parent: Node3D) -> void:
+	var s := Vector3(CITY_SCALE, CITY_SCALE, CITY_SCALE)
+	var street_z := 17.0
+
+	# the road itself, east-west, laid tile by tile.
+	# Sunk by the model's own raised base: `place()` grounds a model so its lowest point is
+	# at y = 0, but the city road tile is authored as a slab sitting ON a base, so grounding
+	# it leaves the running surface proud of the lawn and it reads as a floating tile.
+	var x := -44.0
+	while x <= 44.0:
+		var tile := place(parent, "city", "road_straight", Vector3(x, 0, street_z),
+			PI * 0.5, true, s)
+		if tile != null:
+			tile.position.y -= ROAD_SINK
+		x += 8.0
+
+	# houses on the far side, facing back across the street at ours
+	var far := ["building_A", "building_C", "building_E", "building_B", "building_D"]
+	var bx := -28.0
+	for m in far:
+		place(parent, "city", m, Vector3(bx, 0, street_z + 15.0), PI, true, s)
+		bx += 15.0
+
+	# and two on this side further along, so the street reads as a street
+	place(parent, "city", "building_F", Vector3(-30.0, 0, street_z - 14.0), 0.0, true, s)
+	place(parent, "city", "building_G", Vector3(30.0, 0, street_z - 14.0), 0.0, true, s)
+
+	# furniture along the kerb
+	for p in [
+		["streetlight", -13.0, street_z + 4.5],
+		["streetlight", 13.0, street_z + 4.5],
+		["trafficlight_A", -22.0, street_z + 4.0],
+		["firehydrant", -5.5, street_z - 4.2],
+		["dumpster", 8.0, street_z - 4.6],
+		["bench", -16.0, street_z - 3.6],
+		["trash_A", 4.0, street_z - 3.6],
+		["trash_B", -8.5, street_z - 3.6],
+	]:
+		place(parent, "city", String(p[0]), Vector3(p[1], 0, p[2]), 0.0, true, s)
 
 
 ## A material carrying one of the generated textures, tiled across the surface.

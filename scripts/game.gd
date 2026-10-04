@@ -746,6 +746,34 @@ func _process(delta: float) -> void:
 	_lbl_banner.text = msg if msg_t > 0.0 else ""
 	_refresh_hud()
 
+	# Capture overrides apply whenever they were ASKED for, not only under --shot.
+	# --write-movie never sets _shot_frames, so a recording silently ignored every one of
+	# them: it ignored --shot-fire (so the gun never went off), --shot-pos, the aim angles
+	# and --carry. That invalidated a whole hunt for the muzzle flash before it was spotted.
+	if _shot_moved:
+		# stand just inside the front door, looking into the house
+		player["pos"] = Vector2(0.0, -9.5)
+		yaw = PI
+		pitch = 0.03
+	if _shot_yaw != INF:
+		yaw = deg_to_rad(_shot_yaw)
+	if _shot_pitch != INF:
+		pitch = deg_to_rad(_shot_pitch)
+	if _shot_fire:
+		# takes effect next frame: _fire() is driven earlier in _process
+		fire_held = true
+	if _shot_carry != "":
+		thief["carry"] = _shot_carry
+		for l in loot:
+			l["taken"] = String(l["label"]) == _shot_carry
+			l["delivered"] = false
+	if _shot_pos.x != INF:
+		player["pos"] = _shot_pos
+	if _shot_aim != 0.0:
+		aim_yaw = deg_to_rad(_shot_aim)
+	if _shot_hide_player and player_actor != null and player_actor.root != null:
+		player_actor.root.visible = false
+
 	if _shot_frames > 0 and _shot_wait > 0.0:
 		_shot_wait = maxf(0.0, _shot_wait - delta)
 	elif _shot_frames > 0:
@@ -755,29 +783,6 @@ func _process(delta: float) -> void:
 		# with no cause. This one survives.
 		if _shot_frames % 20 == 0:
 			printerr("[shot] %d frames left" % _shot_frames)
-		if _shot_moved:
-			# stand just inside the front door, looking into the house
-			player["pos"] = Vector2(0.0, -9.5)
-			yaw = PI
-			pitch = 0.03
-		if _shot_yaw != INF:
-			yaw = deg_to_rad(_shot_yaw)
-		if _shot_pitch != INF:
-			pitch = deg_to_rad(_shot_pitch)
-		if _shot_fire:
-			# takes effect next frame, because _fire() is driven earlier in _process
-			fire_held = true
-		if _shot_carry != "":
-			thief["carry"] = _shot_carry
-			for l in loot:
-				l["taken"] = String(l["label"]) == _shot_carry
-				l["delivered"] = false
-		if _shot_pos.x != INF:
-			player["pos"] = _shot_pos
-		if _shot_aim != 0.0:
-			aim_yaw = deg_to_rad(_shot_aim)
-		if _shot_hide_player and player_actor != null and player_actor.root != null:
-			player_actor.root.visible = false
 		if _shot_frames == 0:
 			_capture_and_quit()
 
