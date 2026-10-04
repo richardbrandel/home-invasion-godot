@@ -13,6 +13,7 @@ Mixamo's API needs three headers:
 Usage:
   mixamo-fetch.py search  <query> [type]
   mixamo-fetch.py fetch   <outdir>
+  mixamo-fetch.py clip    <outdir> <name> <query> [character]
 """
 import json
 import os
@@ -168,6 +169,34 @@ if cmd == "search":
 elif cmd == "chars":
     for c in characters():
         print(f"  {c.get('id')}  {c.get('name')}")
+
+elif cmd == "clip":
+    # Fetch ONE animation, skin-free, as <outdir>/<name>.fbx.
+    #
+    # `fetch` re-downloads the whole 48-108 MB character mesh for the first clip of
+    # every run, which is absurd when all that is wanted is one extra animation to add
+    # to a character that is already here. This pulls just the clip.
+    outdir = pathlib.Path(sys.argv[2])
+    name = sys.argv[3]
+    query = sys.argv[4] if len(sys.argv) > 4 else name
+    char_name = sys.argv[5] if len(sys.argv) > 5 else "Romero"
+    allchars = {c["name"]: c["id"] for c in characters(48)}
+    cid = allchars.get(char_name)
+    if not cid:
+        print(f"  !! no character named {char_name!r}")
+        sys.exit(1)
+    hits = search(query)
+    if not hits:
+        print(f"  !! no match for {query!r}")
+        sys.exit(1)
+    # prefer an exact name match, else the shortest name — same rule as `fetch`
+    exact = [h for h in hits
+             if str(h.get("name", "")).strip().lower() == query.strip().lower()]
+    best = exact[0] if exact else min(hits, key=lambda h: len(str(h.get("name", ""))))
+    print(f"  {name}: {best['name']}  ({best['id']})")
+    url = export(cid, best["id"], name, skin=False)
+    n = download(url, outdir / f"{name}.fbx")
+    print(f"  -> {outdir / (name + '.fbx')}  {n // 1024} KB")
 
 elif cmd == "fetch":
     outdir = pathlib.Path(sys.argv[2])

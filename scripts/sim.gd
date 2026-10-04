@@ -119,6 +119,16 @@ const THIEF_RADIUS := 0.42
 const THIEF_HEALTH := 100
 const THIEF_DAMAGE := 7
 const THIEF_SIGHT := 26.0
+## Roughly 200 degrees of awareness, and no reliable sense of what is directly behind
+## him. Without this he spotted a player standing at his back and shot him instantly.
+const THIEF_FOV_DEG := 200.0
+## Radians per second he can turn. A person takes roughly 0.4-0.7 s to come about, and
+## snapping the facing in a single frame was the clearest "this is a prop" tell left in
+## the model.
+const THIEF_TURN_RATE := 4.5
+## How much of his pace he keeps while carrying each item. A home safe is a two-person
+## job in reality and a laptop is one hand; both used to travel at exactly 1.3 m/s.
+const CARRY_SPEED := {"TV": 0.70, "Safe": 0.50, "Laptop": 0.92}
 const THIEF_FIRE_HUNTING := 1.35
 const THIEF_MAG := 8
 const THIEF_RELOAD := 1.5
@@ -253,6 +263,19 @@ static func can_see(a: Vector2, b: Vector2, max_range := 28.0) -> bool:
 	if a.distance_to(b) > max_range:
 		return false
 	return not los_blocked(a, b)
+
+
+## What the intruder can actually perceive.
+##
+## Deliberately NOT folded into can_see(): the minimap uses can_see() to decide whether
+## the HOMEOWNER can see him, and a field of view there would blind the player to a man
+## standing behind his own back. Human awareness is roughly 200 degrees with no reliable
+## rear detection, so this is the intruder's test only.
+static func thief_sees(tp: Vector2, t_yaw: float, ppos: Vector2) -> bool:
+	if not can_see(tp, ppos, THIEF_SIGHT):
+		return false
+	var bearing := (ppos - tp).angle()
+	return absf(wrapf(bearing - t_yaw, -PI, PI)) <= deg_to_rad(THIEF_FOV_DEG * 0.5)
 
 ## Visibility polygon from a point: a ray at every solid corner (with a small
 ## epsilon either side so corners come out crisp) plus a coarse ring.
@@ -495,9 +518,21 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 				thief["target"] = ""
 
 	# ---- move
+	#
+	# The dwell this model always carried and nothing ever read. An intruder stops at the
+	# threshold and listens before committing; without it he starts walking on the first
+	# frame of the round, which is the difference between a person and a cursor.
+	if float(thief["think"]) > 0.0:
+		thief["think"] = maxf(0.0, float(thief["think"]) - dt)
+
+	# Carrying costs pace. The hook below has always existed and nothing ever wrote it,
+	# so a safe and a laptop were hauled at the same speed.
+	thief["speed_scale"] = float(CARRY_SPEED.get(String(thief["carry"]), 1.0))
+
 	var route: Array = thief["route"]
 	var speed_scale: float = thief.get("speed_scale", 1.0)
-	while not route.is_empty():
+	thief["step"] = 0.0
+	while not route.is_empty() and float(thief["think"]) <= 0.0:
 		var wp: Vector2 = route[0]
 		# The homeowner can stand exactly ON a waypoint, and the two bodies then can
 		# never get nearer than the sum of their radii — so the intruder would orbit
@@ -511,10 +546,16 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 			continue
 		var a := (wp - tpos).angle()
 		a = steer_around(a, tpos, ppos)
-		tpos += Vector2(cos(a), sin(a)) * THIEF_SPEED * speed_scale * dt
+		# Come about at a finite rate instead of snapping, and lose pace while still
+		# turning into the new heading — a person does not walk at full speed sideways.
+		var diff := wrapf(a - float(thief["yaw"]), -PI, PI)
+		thief["yaw"] = wrapf(float(thief["yaw"])
+			+ clampf(diff, -THIEF_TURN_RATE * dt, THIEF_TURN_RATE * dt), -PI, PI)
+		var align := clampf(1.0 - absf(diff) / PI, 0.55, 1.0)
+		thief["step"] = THIEF_SPEED * speed_scale * align * dt
+		tpos += Vector2(cos(a), sin(a)) * thief["step"]
 		tpos = resolve_circle(tpos, THIEF_RADIUS)
 		tpos = clamp_to_world(tpos, THIEF_RADIUS)
-		thief["yaw"] = a
 		break
 
 	# ---- solid bodies: neither may stand inside the other. Applied here, once
@@ -526,8 +567,15 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 	thief["pos"] = tpos
 
 	# ---- stuck detection: re-route rather than stand still forever
+	#
+	# Measured against what he was actually trying to do this frame, not against
+	# THIEF_SPEED. He legitimately covers less ground with a safe in his arms and mid-turn,
+	# and while dwelling at the threshold he does not move at all — a fixed threshold read
+	# every one of those as being stuck and re-routed him forever. That cost him the whole
+	# delivery leg: he cleared all three items and delivered none.
 	var moved := tpos.distance_to(thief["prev"])
-	if moved < THIEF_SPEED * dt * 0.25:
+	var want := float(thief.get("step", 0.0))
+	if want > 0.0 and moved < maxf(want * 0.25, 0.0008):
 		thief["stuck_t"] += dt
 	else:
 		thief["stuck_t"] = 0.0
@@ -548,7 +596,7 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 	# ---- aim, then shoot. Sight is recomputed AFTER moving: the thief can step behind
 	# cover during this same step, and firing through a wall would be a bug.
 	var can: bool = player["alive"] and \
-		tpos.distance_to(ppos) < THIEF_SIGHT and not los_blocked(tpos, ppos)
+		thief_sees(tpos, float(thief["yaw"]), ppos)
 	if can:
 		thief["aim"] = minf(thief["aim"] + dt, THIEF_AIM_TIME)
 	else:

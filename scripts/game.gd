@@ -805,7 +805,7 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 	thief_hitbox.position = Vector3(tp.x, 0, tp.y)
 
 	var sees: bool = thief["alive"] and playing \
-		and Sim.can_see(tp, player["pos"], Sim.THIEF_SIGHT)
+		and Sim.thief_sees(tp, float(thief["yaw"]), player["pos"])
 
 	# His pistol is out only while his hands are free — which is precisely when the
 	# sim lets him fire. Prop and rule agree, so a holstered gun never shoots and a
