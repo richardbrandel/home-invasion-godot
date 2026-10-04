@@ -2,6 +2,10 @@
 
 ## Progress
 
+- **Searching — DONE** (2026-10-04). He no longer knows where the valuables are: an item is
+  unknown until he has stood in its room, each room is searched once, and the kitchen is a
+  deliberate decoy that holds nothing. Heist 7/7 at ~137 s (was ~126). Seven new tests.
+
 - **Audit item 10 finished — DONE** (2026-10-04). Reserve ammunition drawn from a real pool
   with per-weapon magazines; 78 hp instead of 100 (no longer a bullet sponge); shotgun
   pellets lose energy with range; his 55% accuracy floor removed so distance is worth
