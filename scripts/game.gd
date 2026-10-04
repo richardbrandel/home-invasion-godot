@@ -104,6 +104,20 @@ var _ov_title: Label
 var _ov_sub: Label
 var _tracers: Array = []
 var _loot_nodes: Array = []
+## The intruder's hit zones, in the order the collision shapes are added — because a
+## raycast reports the shape INDEX and nothing else. `mult` is applied to the weapon's
+## damage, so a pistol head shot (26 x 4.0) is lethal and a leg shot (x 0.55) is not.
+## Overlapping on purpose: a gap is a hole a bullet passes through.
+const HIT_ZONES := [
+	{"name": "legs", "shape": "capsule", "y": 0.45, "r": 0.15, "h": 0.90, "mult": 0.55},
+	{"name": "torso", "shape": "capsule", "y": 1.15, "r": 0.24, "h": 0.72, "mult": 1.0},
+	{"name": "head", "shape": "sphere", "y": 1.60, "r": 0.14, "mult": 4.0},
+]
+## damage applied to something hit exactly where a zone's shapes meet
+const HIT_MULT_DEFAULT := 1.0
+## How fast you can move while changing a magazine, as a fraction of normal pace.
+const RELOAD_PACE := 0.62
+
 var _crosshair: Control
 
 # --------------------------------------------------------------------- effects
@@ -122,6 +136,10 @@ var _flash_t := 0.0
 ## rather than claiming he took everything.
 var _ran_off := false
 var _escaped_with := 0
+## The last zone a shot struck, for capture mode only — a raycast reports a shape INDEX and
+## nothing else, and an index tells you nothing about whether the zones are where you think.
+var _last_zone := "-"
+var _last_mult := 0.0
 
 # ------------------------------------------------------------------------ audio
 #
@@ -434,18 +452,30 @@ func _spawn_actors() -> void:
 		thief_actor.attach_weapon()
 		thief_actor.set_weapon("pistol")
 
-	# a separate body so bullet rays can tell the thief from the scenery
+	# a separate body so bullet rays can tell the thief from the scenery.
+	#
+	# It carries THREE shapes, because a shot to the leg is not a shot to the chest — the
+	# audit's "a shot to the leg equals one to the chest". The shape index comes back on the
+	# raycast hit, so knowing which zone was struck costs nothing at all.
+	# Heights are for a 1.75 m man and deliberately OVERLAP: a gap between zones is a hole
+	# a bullet can pass through without hitting him.
 	thief_hitbox = StaticBody3D.new()
 	thief_hitbox.name = "ThiefHitbox"
 	thief_hitbox.collision_layer = LAYER_THIEF
 	thief_hitbox.collision_mask = 0
-	var cs := CollisionShape3D.new()
-	var cap := CapsuleShape3D.new()
-	cap.radius = 0.38
-	cap.height = 1.7
-	cs.shape = cap
-	cs.position = Vector3(0, 0.85, 0)
-	thief_hitbox.add_child(cs)
+	for z in HIT_ZONES:
+		var cs := CollisionShape3D.new()
+		if String(z["shape"]) == "sphere":
+			var sp := SphereShape3D.new()
+			sp.radius = float(z["r"])
+			cs.shape = sp
+		else:
+			var cap := CapsuleShape3D.new()
+			cap.radius = float(z["r"])
+			cap.height = float(z["h"])
+			cs.shape = cap
+		cs.position = Vector3(0, float(z["y"]), 0)
+		thief_hitbox.add_child(cs)
 	add_child(thief_hitbox)
 
 
@@ -700,6 +730,11 @@ func _process(delta: float) -> void:
 		elif player["sprinting"]:
 			speed = Sim.PLAYER_SPRINT_SPEED
 		var wish := Vector2.ZERO
+		if player["reloading"] > 0.0:
+			# A man changing a magazine is not walking at full pace. Reloading used to cost
+			# nothing at all, so the correct play was to reload while sprinting through a
+			# doorway.
+			speed *= RELOAD_PACE
 
 		if axis.length() > 0.0:
 			# camera-relative: forward is the yaw direction in XZ
@@ -838,14 +873,20 @@ func _drain_events() -> void:
 					Vector3(thief["pos"].x, 1.3, thief["pos"].y), -3.0)
 				var shot_from := Vector3(thief["pos"].x, 1.3, thief["pos"].y)
 				var shot_to := Vector3(player["pos"].x, 1.3, player["pos"].y)
-				# His shots are NOT guaranteed. Every event has always carried a spread
-				# that nothing ever read, so 100% of them hit — unlike the player's own
-				# weapons, which scatter. Accuracy now falls off with range, so a hit is
-				# earned rather than looking like he fired through whatever you ducked
-				# behind. Resolved here rather than in sim.gd so the sim stays pure and
-				# its tests stay deterministic.
-				var range_m := shot_from.distance_to(shot_to)
-				if randf() <= clampf(1.0 - range_m * 0.02, 0.55, 1.0):
+				# HIS ROUND IS A RAY NOW. It used to be a probability roll on a line with
+				# geometry never consulted, so nothing in the house could stop it — a wall
+				# between the two of you was simply not part of the calculation.
+				var wall_q := PhysicsRayQueryParameters3D.create(shot_from, shot_to)
+				wall_q.collision_mask = LAYER_WORLD
+				wall_q.exclude = [thief_hitbox.get_rid()] if thief_hitbox != null else []
+				var wall := get_world_3d().direct_space_state.intersect_ray(wall_q)
+				if not wall.is_empty():
+					# it strikes the wall, and the tracer STOPS there rather than
+					# continuing through to you
+					_add_tracer(shot_from, wall["position"])
+					_add_impact(wall["position"], wall["normal"], false, false)
+				elif randf() <= clampf(1.0 - shot_from.distance_to(shot_to) * 0.02,
+						0.55, 1.0):
 					_add_tracer(shot_from, shot_to)
 					Sim.damage_player(player, Sim.THIEF_DAMAGE, events)
 				else:
@@ -1110,7 +1151,13 @@ func _fire() -> void:
 			var hit_thief: bool = collider is Node \
 				and collider.name == "ThiefHitbox" and thief["alive"]
 			if hit_thief:
-				Sim.damage_thief(thief, spec["dmg"], events)
+				var zone := int(hit.get("shape", 1))
+				var mult: float = HIT_MULT_DEFAULT
+				if zone >= 0 and zone < HIT_ZONES.size():
+					mult = float(HIT_ZONES[zone]["mult"])
+					_last_zone = String(HIT_ZONES[zone]["name"])
+				_last_mult = mult
+				Sim.damage_thief(thief, float(spec["dmg"]) * mult, events)
 			# A mark on whatever it struck. The hit point has always been computed and then
 			# used ONLY as the tracer's end, so emptying a shotgun into a wardrobe left no
 			# sign of it — the single biggest reason shooting felt like it was happening to
@@ -1502,6 +1549,10 @@ func _refresh_hud() -> void:
 		# read straight out of a frame instead of guessed at
 		tstate += " [fear %.1f stag %.1f]" % [float(thief["fear"]), float(thief["stagger"])]
 		stance += "  %.2f m/s" % (player["vel"] as Vector2).length()
+		# the zone goes FIRST: the stance label is clipped at the HUD's width, and reading
+		# "intruder: down" with the zone silently cut off made three good shots look like
+		# misses during verification.
+		tstate = "zone=%s x%.2f " % [_last_zone, _last_mult] + tstate
 	_lbl_stance.text = "%s    intruder: %s" % [stance, tstate]
 	_lbl_loot.text = "LOOT STOLEN  %d / 3" % (3 - Sim.remaining(loot))
 
