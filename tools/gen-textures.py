@@ -150,6 +150,80 @@ def shingles() -> None:
     save("roof_shingle", px)
 
 
+def save_rgba(name: str, px, w: int, h: int) -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    img = Image.new("RGBA", (w, h))
+    img.putdata(px)
+    p = OUT / f"{name}.png"
+    img.save(p)
+    print(f"  {name:<14} {w}x{h}  {p.stat().st_size // 1024} KB  (alpha)")
+
+
+def bullet_hole() -> None:
+    """RGBA. A dark hole with a ragged rim, for a quad laid on whatever was hit."""
+    S = 128
+    rnd = random.Random(71)
+    # a low-frequency wobble so the rim is not a perfect circle
+    wobble = [1.0 + 0.28 * math.sin(a * 0.7 + 0.9) + 0.14 * math.sin(a * 2.3 + 2.1)
+              for a in [i * 0.11 for i in range(128)]]
+    px = []
+    for y in range(S):
+        for x in range(S):
+            dx = (x - S * 0.5) / (S * 0.5)
+            dy = (y - S * 0.5) / (S * 0.5)
+            r = math.hypot(dx, dy)
+            a = math.atan2(dy, dx)
+            rim = wobble[int((a % math.tau) / 0.11) % 128] * 0.42
+            if r < rim * 0.55:
+                c = (14, 12, 11)                     # the hole itself
+                alpha = 255
+            elif r < rim:
+                t = (r - rim * 0.55) / max(rim * 0.45, 1e-6)
+                c = mix((46, 40, 34), (150, 142, 130), t)
+                alpha = int(230 * (1.0 - t * 0.55))
+            elif r < rim * 1.9:
+                # dust ring, and a few radial cracks
+                t = (r - rim) / max(rim * 0.9, 1e-6)
+                crack = 1.0 if math.sin(a * 9.0) > 0.86 else 0.0
+                c = mix((150, 142, 130), (205, 200, 192), t)
+                alpha = int((110 + 90 * crack) * (1.0 - t))
+            else:
+                c = (205, 200, 192)
+                alpha = 0
+            n = rnd.randint(-7, 7)
+            px.append((max(0, min(255, c[0] + n)), max(0, min(255, c[1] + n)),
+                       max(0, min(255, c[2] + n)), max(0, min(255, alpha))))
+    save_rgba("bullet_hole", px, S, S)
+
+
+def muzzle_flash() -> None:
+    """RGBA. A star with spikes, meant to be drawn unshaded and additive for a frame."""
+    S = 128
+    rnd = random.Random(83)
+    px = []
+    for y in range(S):
+        for x in range(S):
+            dx = (x - S * 0.5) / (S * 0.5)
+            dy = (y - S * 0.5) / (S * 0.5)
+            r = math.hypot(dx, dy)
+            a = math.atan2(dy, dx)
+            core = max(0.0, 1.0 - r / 0.30)
+            spikes = 0.0
+            for k in range(5):
+                spikes += max(0.0, math.cos(a * 6.0 + k * 1.7)) ** 12
+            spikes = spikes * max(0.0, 1.0 - r / 1.0) * 0.75
+            v = min(1.0, core + spikes)
+            if v <= 0.01:
+                px.append((0, 0, 0, 0))
+                continue
+            # white hot at the centre, orange at the edges
+            c = mix((255, 168, 40), (255, 250, 225), min(1.0, core * 1.6))
+            n = rnd.randint(-10, 10)
+            px.append((max(0, min(255, c[0] + n)), max(0, min(255, c[1] + n)),
+                       max(0, min(255, c[2] + n)), int(255 * v)))
+    save_rgba("muzzle_flash", px, S, S)
+
+
 def main() -> None:
     print("writing assets/textures/")
     wood_floor()
@@ -157,6 +231,8 @@ def main() -> None:
     driveway()
     plaster()
     shingles()
+    bullet_hole()
+    muzzle_flash()
     print("all tileable by construction — integer-frequency sinusoids plus fine grain")
 
 

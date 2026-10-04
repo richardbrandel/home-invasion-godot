@@ -106,6 +106,19 @@ var _tracers: Array = []
 var _loot_nodes: Array = []
 var _crosshair: Control
 
+# --------------------------------------------------------------------- effects
+#
+# The hit point has always been computed and then thrown away — used only as the tracer's
+# end — so nothing in the house ever showed that it had been shot. Marks are POOLED and
+# reused oldest-first rather than freed, because one shotgun blast is nine of them and a
+# long round would otherwise churn dozens of nodes per trigger pull.
+const MARK_MAX := 48
+var _marks: Array[MeshInstance3D] = []
+var _mark_i := 0
+var _mark_mat: StandardMaterial3D
+var _flash: MeshInstance3D
+var _flash_t := 0.0
+
 # ------------------------------------------------------------------------ audio
 #
 # The project had NO audio at all until 2026-10-04 — no AudioStreamPlayer, nothing on
@@ -147,6 +160,10 @@ var _shot_aim := 0.0
 ## photographed on demand instead of hunting for the moment he happens to pick one up.
 ## He only grabs three times in a ~99 s round and the window is a few seconds wide.
 var _shot_carry := ""
+## Hold the trigger during a capture. Without it a screenshot fires nothing — there is no
+## mouse — so anything that only happens when you shoot (impact marks, the muzzle flash,
+## recoil) cannot be photographed at all.
+var _shot_fire := false
 
 
 func _ready() -> void:
@@ -160,6 +177,7 @@ func _ready() -> void:
 	_spawn_actors()
 	_build_hud()
 	_build_audio()
+	_build_effects()
 	reset()
 	_build_loot()
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
@@ -203,6 +221,8 @@ func _ready() -> void:
 			_shot_aim = float(a.substr(11))
 		if a.begins_with("--carry="):
 			_shot_carry = a.substr(8)
+		if a == "--shot-fire":
+			_shot_fire = true
 		# force the fallback scheme, so "does reverting still work" is checkable
 		if a == "--aim=fixed":
 			aim_cone = false
@@ -352,6 +372,26 @@ func _build_collision() -> void:
 			continue
 		_add_box(body, f["rect"], f["h"])
 
+	# The floor, the ceiling and the van had NO collision at all, so a bullet passed
+	# straight through them: you could not shoot the van, and a round aimed at the ground
+	# carried on to the horizon. Movement does not use physics — the sim is 2D and owns
+	# position — so these exist only to stop rays.
+	var house := Sim.HOUSE
+	_add_box_at(body, house, 0.14, -0.06)                       # floor slab
+	_add_box_at(body, house, 0.22, House.WALL_TARGET_H + 0.11)  # ceiling slab
+	_add_box_at(body, Sim.VAN, 1.8, 0.9)                        # the van
+
+
+## Same as _add_box but with the box's vertical CENTRE given rather than its base.
+func _add_box_at(parent: Node3D, r: Rect2, h: float, centre_y: float) -> void:
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(r.size.x, h, r.size.y)
+	cs.shape = shape
+	cs.position = Vector3(r.position.x + r.size.x * 0.5, centre_y,
+		r.position.y + r.size.y * 0.5)
+	parent.add_child(cs)
+
 
 func _add_box(parent: Node3D, r: Rect2, h: float) -> void:
 	var cs := CollisionShape3D.new()
@@ -445,10 +485,12 @@ func _part(parent: Node3D, mesh: Mesh, pos: Vector3, col: Color,
 	mat.albedo_color = col
 	mat.roughness = rough
 	mat.metallic = metal
-	# a trace of self-illumination, so a valuable is still findable in a dim corner.
-	# These are gameplay objectives; at 0.10 they measured near-black in the bedroom.
+	# a trace of self-illumination, so a valuable is still findable in a dim corner. These
+	# are gameplay objectives, and at 0.10 they measured near-black in the bedroom — but
+	# the scene is bright daylight and textured now, so this is back down to a hint rather
+	# than the glow that stood in for lighting when everything was flat and dark.
 	mat.emission_enabled = true
-	mat.emission = col * 0.18
+	mat.emission = col * 0.07
 	m.material_override = mat
 	parent.add_child(m)
 
@@ -693,6 +735,10 @@ func _process(delta: float) -> void:
 	if thief_actor != null and thief_actor.root != null:
 		thief_actor.grip(1.15 if thief.get("carry", "") != "" else 0.0)
 	_update_tracers(delta)
+	if _flash != null and _flash_t > 0.0:
+		_flash_t -= delta
+		if _flash_t <= 0.0:
+			_flash.visible = false
 	_draw_minimap()
 
 	if msg_t > 0.0:
@@ -718,6 +764,9 @@ func _process(delta: float) -> void:
 			yaw = deg_to_rad(_shot_yaw)
 		if _shot_pitch != INF:
 			pitch = deg_to_rad(_shot_pitch)
+		if _shot_fire:
+			# takes effect next frame, because _fire() is driven earlier in _process
+			fire_held = true
 		if _shot_carry != "":
 			thief["carry"] = _shot_carry
 			for l in loot:
@@ -981,6 +1030,7 @@ func _fire() -> void:
 		var m := player_actor.muzzle()
 		if m != Vector3.ZERO:
 			muzzle = m
+	_add_flash(muzzle)
 
 	var space := get_world_3d().direct_space_state
 	for i in int(spec["pellets"]):
@@ -998,11 +1048,18 @@ func _fire() -> void:
 		if not hit.is_empty():
 			end = hit["position"]
 			var collider = hit["collider"]
-			if collider is Node and collider.name == "ThiefHitbox" and thief["alive"]:
+			var hit_thief: bool = collider is Node \
+				and collider.name == "ThiefHitbox" and thief["alive"]
+			if hit_thief:
 				Sim.damage_thief(thief, spec["dmg"], events)
+			# A mark on whatever it struck. The hit point has always been computed and then
+			# used ONLY as the tracer's end, so emptying a shotgun into a wardrobe left no
+			# sign of it — the single biggest reason shooting felt like it was happening to
+			# the HUD rather than to the house.
+			_add_impact(end, hit["normal"],
+				int(spec["pellets"]) > 1, hit_thief)
 		_add_tracer(muzzle, end)
 	_drain_events()
-
 	if player["mag"] <= 0:
 		player["reloading"] = spec["reload"]
 		if player_actor != null:
@@ -1241,6 +1298,72 @@ func _update_door_sound() -> void:
 	if (_thief_door_z - door_line) * (z - door_line) < 0.0:
 		_play_at("door", Vector3(thief["pos"].x, 1.0, door_line), -6.0)
 	_thief_door_z = z
+
+
+func _build_effects() -> void:
+	_flash = MeshInstance3D.new()
+	var q := QuadMesh.new()
+	q.size = Vector2(0.34, 0.34)
+	_flash.mesh = q
+	var m := StandardMaterial3D.new()
+	var tex = load("res://assets/textures/muzzle_flash.png")
+	if tex == null:
+		push_warning("effects: missing muzzle_flash texture")
+	else:
+		m.albedo_texture = tex
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	# billboarded: a flash is a light bloom, not an object with a facing
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_flash.material_override = m
+	_flash.visible = false
+	add_child(_flash)
+
+
+func _add_impact(pos: Vector3, normal: Vector3, big: bool, on_flesh: bool) -> void:
+	if _mark_mat == null:
+		_mark_mat = StandardMaterial3D.new()
+		var tex = load("res://assets/textures/bullet_hole.png")
+		if tex != null:
+			_mark_mat.albedo_texture = tex
+		_mark_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_mark_mat.roughness = 1.0
+		# drawn on top of the surface it sits on, so a 1 cm offset cannot z-fight
+		_mark_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+		_mark_mat.no_depth_test = false
+	var m: MeshInstance3D
+	if _marks.size() < MARK_MAX:
+		m = MeshInstance3D.new()
+		var q := QuadMesh.new()
+		q.size = Vector2(0.16, 0.16)
+		m.mesh = q
+		m.material_override = _mark_mat
+		add_child(m)
+		_marks.append(m)
+	else:
+		m = _marks[_mark_i]
+		_mark_i = (_mark_i + 1) % MARK_MAX
+	var s := 1.7 if big else 1.0
+	if on_flesh:
+		s *= 0.7
+	m.scale = Vector3(s, s, s)
+	var up := Vector3.UP
+	if absf(normal.dot(up)) > 0.95:
+		up = Vector3.RIGHT
+	# QuadMesh faces +Z, so -Z is aimed back down the surface normal
+	m.global_transform = Transform3D(Basis.looking_at(-normal, up), pos + normal * 0.012)
+	m.visible = true
+
+
+## The flash at the muzzle. Firing used to produce a tracer and nothing else.
+func _add_flash(pos: Vector3) -> void:
+	if _flash == null:
+		return
+	_flash.global_position = pos
+	_flash.visible = true
+	_flash_t = 0.045
+	_flash.rotate_y(randf() * TAU)
 
 
 func _add_hud_rect(parent: Node, r: Rect2, col: Color) -> void:
