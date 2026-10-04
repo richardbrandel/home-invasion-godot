@@ -58,6 +58,11 @@ const AIM_SENS_X := 0.0022
 const AIM_SENS_Y := 0.0018
 const PITCH_MIN := -0.30        # looking up
 const PITCH_MAX := 0.85         # looking down
+## View kick per shot in radians, and how fast it settles. A pistol barely moves the
+## sights; a shotgun shoves them. Firing used to leave the view perfectly still, which
+## is a large part of why shooting read as a cursor click rather than a gun going off.
+const RECOIL := {"pistol": 0.022, "shotgun": 0.062}
+const RECOIL_RECOVER := 0.85    # rad/s the view drifts back
 
 ## Camera offset behind and above the homeowner's eye. At zero the camera is inside his
 ## head and he must be hidden; pulled back he is drawn, which is what Richard asked for.
@@ -80,6 +85,8 @@ const CAM_FADE := 0.42
 var aim_cone := false
 var aim_yaw := 0.0
 var aim_pitch := 0.0
+## Radians of view kick still to drift back down after a shot.
+var recoil_recover := 0.0
 ## Live camera offset, so the distance can be tuned without a code edit.
 var cam_back := CAM_BACK
 var cam_up := CAM_UP
@@ -98,6 +105,28 @@ var _ov_sub: Label
 var _tracers: Array = []
 var _loot_nodes: Array = []
 var _crosshair: Control
+
+# ------------------------------------------------------------------------ audio
+#
+# The project had NO audio at all until 2026-10-04 — no AudioStreamPlayer, nothing on
+# disk. The intruder arrived in complete silence, which for a home invasion removes the
+# sense you would actually rely on: you hear him before you see him.
+#
+# The samples are synthesised by tools/gen-sfx.py, not recorded. There was no library to
+# download and no microphone in the loop, and it turns out that suits this set — a
+# gunshot is a noise transient over a low thump and a footstep is a filtered click, and
+# both of those synthesis does convincingly. It would not work for a voice.
+#
+# The player's own gun is a plain AudioStreamPlayer: it is at the listener, so 3D
+# positioning buys nothing and risks an odd pan. Everything in the world is a 3D player,
+# so the intruder's shots come FROM the intruder and are muffled by distance.
+var _snd_own: AudioStreamPlayer
+var _pool: Array[AudioStreamPlayer3D] = []
+var _pool_i := 0
+var _sfx := {}
+var _step_player := 0.0
+var _step_thief := 0.0
+var _thief_door_z := 0.0
 
 # Debug: `godot --path . -- --shot` renders 120 frames, writes shot.png next to
 # the project and quits. Lets the build be verified visually without a human.
@@ -130,6 +159,7 @@ func _ready() -> void:
 	_build_collision()
 	_spawn_actors()
 	_build_hud()
+	_build_audio()
 	reset()
 	_build_loot()
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
@@ -569,6 +599,10 @@ func _input(event: InputEvent) -> void:
 			var spec: Dictionary = Sim.WEAPONS[player["weapon"]]
 			if player["reloading"] <= 0.0 and player["mag"] < spec["mag"]:
 				player["reloading"] = spec["reload"]
+				# Actor.RELOAD was merged into every character from the beginning and
+				# referenced nowhere — a clip the project paid for and never played.
+				if player_actor != null:
+					player_actor.play_for(Actor.RELOAD, float(spec["reload"]))
 		elif event.keycode == KEY_T:
 			# Both schemes stay live on purpose: this is an experiment, and Richard asked
 			# to fall back to plain first person if he does not like the cone.
@@ -638,6 +672,8 @@ func _process(delta: float) -> void:
 		_drain_events()
 
 	_update_actors(delta, playing, player_moving)
+	_update_footsteps(delta, playing, player_moving)
+	_update_door_sound()
 	_update_loot()
 	_update_camera()
 	# Deliberately after the camera moves: the viewmodel follows the camera transform, so
@@ -709,6 +745,13 @@ func _drain_events() -> void:
 	for ev in events:
 		match ev["type"]:
 			"thiefShot":
+				# He used to damage you by standing still: sim.gd fired him and nothing
+				# ever played the clip. Actor.SHOOT was only ever referenced for the
+				# player.
+				if thief_actor != null and thief["alive"]:
+					thief_actor.play_once(Actor.SHOOT)
+				_play_at("gunshot_pistol",
+					Vector3(thief["pos"].x, 1.3, thief["pos"].y), -3.0)
 				var shot_from := Vector3(thief["pos"].x, 1.3, thief["pos"].y)
 				var shot_to := Vector3(player["pos"].x, 1.3, player["pos"].y)
 				# His shots are NOT guaranteed. Every event has always carried a spread
@@ -729,6 +772,12 @@ func _drain_events() -> void:
 			"grabbed":
 				msg = "They grabbed the %s!" % ev["label"]
 				msg_t = 1.8
+			"thiefHit":
+				# sim.gd has always emitted this and game.gd has never read it, so
+				# shooting a man produced no feedback at all beyond a HUD counter.
+				_play_at("impact", Vector3(thief["pos"].x, 1.15, thief["pos"].y), -2.0)
+			"playerHit":
+				_play_at("impact", Vector3(player["pos"].x, 1.15, player["pos"].y), 0.0)
 			"delivered":
 				msg = "They got the %s!" % ev["label"]
 				msg_t = 2.0
@@ -768,6 +817,11 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 	player_actor.root.rotation.y = yaw
 	# Cone mode: walking turns the body toward wherever you are aiming, so the view
 	# catches up on its own and you are never stuck aiming sideways down a corridor.
+	# The recoil recovery rides along here because this runs before _update_camera().
+	if recoil_recover > 0.0:
+		var back := minf(recoil_recover, RECOIL_RECOVER * delta)
+		pitch = clampf(pitch + back, PITCH_MIN, PITCH_MAX)
+		recoil_recover -= back
 	if aim_cone and playing and player_moving and aim_yaw != 0.0:
 		var swing := clampf(aim_yaw, -CONE_RECENTRE * delta, CONE_RECENTRE * delta)
 		yaw += swing
@@ -907,6 +961,12 @@ func _fire() -> void:
 	player["cd"] = spec["cd"]
 	if player_actor != null:
 		player_actor.play_once(Actor.SHOOT)
+	# the sights jump, then partly settle — which is what a real sight picture does between
+	# shots, and what makes a shotgun feel different from a pistol
+	var kick: float = RECOIL.get(String(player["weapon"]), 0.022)
+	pitch = clampf(pitch - kick, PITCH_MIN, PITCH_MAX)
+	recoil_recover += kick * 0.65
+	_play_own("gunshot_" + String(player["weapon"]))
 
 	# The ray starts at the CAMERA, not the eye. With the camera pulled back behind the
 	# homeowner those are different points, and casting from the eye while the crosshair
@@ -945,6 +1005,8 @@ func _fire() -> void:
 
 	if player["mag"] <= 0:
 		player["reloading"] = spec["reload"]
+		if player_actor != null:
+			player_actor.play_for(Actor.RELOAD, float(spec["reload"]))
 
 
 func _add_tracer(from: Vector3, to: Vector3) -> void:
@@ -1069,6 +1131,118 @@ func _make_hud_click_through(layer: CanvasLayer) -> void:
 
 ## One flat rectangle of HUD. Used to build the crosshair, whose arms and centre dot
 ## each need an outline drawn behind a core.
+# ------------------------------------------------------------------------ audio
+func _build_audio() -> void:
+	for name in ["gunshot_pistol", "gunshot_shotgun", "footstep", "impact",
+			"door", "van_idle"]:
+		var p := "res://assets/audio/%s.wav" % name
+		if ResourceLoader.exists(p):
+			_sfx[name] = load(p)
+		else:
+			push_warning("audio: missing " + p)
+
+	_snd_own = AudioStreamPlayer.new()
+	_snd_own.volume_db = -4.0
+	add_child(_snd_own)
+
+	# A small pool, because a shotgun blast, an impact and a footfall can overlap and a
+	# single player would cut itself off. Six is more than the game can produce at once.
+	for i in 6:
+		var p := AudioStreamPlayer3D.new()
+		p.max_distance = 45.0
+		p.unit_size = 5.0
+		add_child(p)
+		_pool.append(p)
+
+	# The van idles for the whole round. It is the reason the intruder is in a hurry and
+	# the reason you can hear that someone has arrived, and it was a silent prop.
+	var idle = _sfx.get("van_idle")
+	if idle != null:
+		var v := AudioStreamPlayer3D.new()
+		v.stream = idle
+		v.global_position = Vector3(Sim.VAN.position.x + Sim.VAN.size.x * 0.5, 1.0,
+			Sim.VAN.position.y + Sim.VAN.size.y * 0.5)
+		v.max_distance = 60.0
+		v.unit_size = 12.0
+		v.volume_db = -6.0
+		if idle is AudioStreamWAV:
+			var w := idle as AudioStreamWAV
+			w.loop_mode = AudioStreamWAV.LOOP_FORWARD
+			# Setting loop_mode alone is not enough: the loop region defaults to an
+			# empty span, so the stream plays nothing at all and the round is silent
+			# between gunshots. Measured — 211 of 499 windows in a captured mix were
+			# EXACTLY zero, which a continuous idle makes impossible.
+			w.loop_begin = 0
+			w.loop_end = int(w.get_length() * float(w.mix_rate))
+		add_child(v)
+		v.play()
+
+
+## The player's own weapon: at the listener, so no 3D.
+func _play_own(name: String, db := 0.0) -> void:
+	var s = _sfx.get(name)
+	if s == null or _snd_own == null:
+		return
+	_snd_own.stream = s
+	_snd_own.volume_db = db
+	_snd_own.play()
+
+
+## A sound somewhere in the world. Position matters: it is how you tell where he is.
+func _play_at(name: String, pos: Vector3, db := 0.0) -> void:
+	var s = _sfx.get(name)
+	if s == null or _pool.is_empty():
+		return
+	var p := _pool[_pool_i]
+	_pool_i = (_pool_i + 1) % _pool.size()
+	p.stream = s
+	p.global_position = pos
+	p.volume_db = db
+	p.play()
+
+
+## Footfalls for both of them.
+##
+## Nothing in the project made a sound before this, so the intruder crossed the house in
+## silence and the only warning was the minimap dot — which is the one thing a defending
+## homeowner does NOT have.
+func _update_footsteps(delta: float, playing: bool, player_moving: bool) -> void:
+	if not playing:
+		return
+	var ppos: Vector2 = player["pos"]
+	if player_moving:
+		_step_player -= delta
+		if _step_player <= 0.0:
+			var sprinting: bool = player["sprinting"]
+			_step_player = 0.30 if sprinting else 0.44
+			_play_at("footstep", Vector3(ppos.x, 0.1, ppos.y),
+				-5.0 if sprinting else -9.0)
+	else:
+		_step_player = 0.0
+
+	var moving: bool = thief["alive"] and (thief["route"] as Array).size() > 0
+	if moving:
+		var tp: Vector2 = thief["pos"]
+		var laden: bool = String(thief["carry"]) != ""
+		_step_thief -= delta
+		if _step_thief <= 0.0:
+			# a laden man is slower and plants harder
+			_step_thief = 0.62 if laden else 0.46
+			_play_at("footstep", Vector3(tp.x, 0.1, tp.y), -4.0 if laden else -6.0)
+	else:
+		_step_thief = 0.0
+
+
+## The front door, which does not exist as an object — so this is the sound of him
+## crossing the threshold line. It is the cue that someone has come in.
+func _update_door_sound() -> void:
+	var z: float = thief["pos"].y
+	var door_line: float = Sim.HOUSE.end.y
+	if (_thief_door_z - door_line) * (z - door_line) < 0.0:
+		_play_at("door", Vector3(thief["pos"].x, 1.0, door_line), -6.0)
+	_thief_door_z = z
+
+
 func _add_hud_rect(parent: Node, r: Rect2, col: Color) -> void:
 	var c := ColorRect.new()
 	c.color = col

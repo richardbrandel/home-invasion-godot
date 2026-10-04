@@ -289,6 +289,18 @@ func play(name: String, speed := 1.0) -> void:
 	anim.play(name, 0.2)
 
 
+## Play a clip as a one-shot for `seconds`, then hand control back to locomotion.
+## play_once() uses ONE_SHOT_WINDOW, which is tuned for SHOOT's two-shot timing and is
+## far too short for a reload that genuinely takes 1.15-1.6 s.
+func play_for(name: String, seconds: float) -> void:
+	if anim == null or not anim.has_animation(name):
+		return
+	_one_shot = name
+	_one_shot_t = maxf(seconds, 0.15)
+	anim.speed_scale = 1.0
+	anim.play(name, 0.08)
+
+
 func play_once(name: String) -> void:
 	if anim == null or not anim.has_animation(name):
 		return
