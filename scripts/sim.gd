@@ -129,6 +129,15 @@ const THIEF_SPEED := 1.30          # was 2.6, then 1.75 — still too brisk
 const THIEF_RADIUS := 0.42
 const THIEF_HEALTH := 100
 const THIEF_DAMAGE := 7
+## The intruder's health. 100 against 26 a pistol round made him a bullet sponge, which is
+## the audit's complaint, and it was measured BEFORE hit locations existed. At 78 he takes
+## three torso hits (26 each) or one head shot (x4.0) or a face full of shot, which is about
+## what a person takes. The HUD reads him against THIS rather than a literal 100.
+const THIEF_MAX_HP := 78.0
+## Reserve ammunition. Reloads used to conjure a full magazine from nowhere, so ammunition
+## was not a resource and the correct play was never to think about it. These are the total
+## rounds you own for the round, magazine included.
+const RESERVE := {"pistol": 36, "shotgun": 18}
 const THIEF_SIGHT := 26.0
 ## Roughly 200 degrees of awareness, and no reliable sense of what is directly behind
 ## him. Without this he spotted a player standing at his back and shot him instantly.
@@ -460,10 +469,34 @@ static func route_to(from_key: String, to_key: String) -> Array[Vector2]:
 static func create_player() -> Dictionary:
 	return {
 		"pos": Vector2(0, -10.6), "yaw": 0.0, "pitch": 0.24,
-		"hp": 100.0, "alive": true, "weapon": "pistol",
+		"hp": THIEF_MAX_HP, "alive": true, "weapon": "pistol",
 		"crouching": false, "sprinting": false, "vel": Vector2.ZERO,
-		"mag": 12, "cd": 0.0, "reloading": 0.0,
+		"mag": 12, "mags": {"pistol": 12, "shotgun": 6},
+		"reserve": RESERVE.duplicate(), "cd": 0.0, "reloading": 0.0,
 	}
+
+## Load the current weapon's magazine out of the reserve. Returns true if anything moved.
+##
+## In sim.gd rather than game.gd so it can be tested headlessly: the reserve is a gameplay
+## rule, and the game layer is not reachable from the test harness.
+static func load_magazine(player: Dictionary) -> bool:
+	var w := String(player["weapon"])
+	var want := int(WEAPONS[w]["mag"])
+	var have := int((player["reserve"] as Dictionary).get(w, 0))
+	if have <= 0 or int(player["mag"]) >= want:
+		return false
+	var take := mini(want - int(player["mag"]), have)
+	player["mag"] = int(player["mag"]) + take
+	(player["reserve"] as Dictionary)[w] = have - take
+	(player["mags"] as Dictionary)[w] = int(player["mag"])
+	return true
+
+
+static func can_load_magazine(player: Dictionary) -> bool:
+	var w := String(player["weapon"])
+	return int((player["reserve"] as Dictionary).get(w, 0)) > 0 \
+		and int(player["mag"]) < int(WEAPONS[w]["mag"])
+
 
 static func create_thief() -> Dictionary:
 	return {

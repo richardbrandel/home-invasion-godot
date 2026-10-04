@@ -387,6 +387,49 @@ func _init() -> void:
 	check("and coasts to a halt rather than stopping dead", halted > 0,
 		"halted after %d frames from %.2f m/s" % [halted, peak])
 
+	# ---- ammunition is a resource, not a conjuring trick
+	_banner("ammunition")
+	player = Sim.create_player()
+	check("he starts with a part-full magazine and a reserve",
+		int(player["mag"]) == 12 and int(player["reserve"]["pistol"]) == 36,
+		"mag %d, reserve %d" % [player["mag"], player["reserve"]["pistol"]])
+	# empty the magazine, then load it
+	player["mag"] = 0
+	var moved: bool = Sim.load_magazine(player)
+	check("a reload comes out of the reserve and nowhere else", moved,
+		"reload returned %s" % moved)
+	check("and the reserve is smaller by exactly what was loaded",
+		int(player["mag"]) == 12 and int(player["reserve"]["pistol"]) == 24,
+		"mag %d, reserve %d" % [player["mag"], player["reserve"]["pistol"]])
+	# a partial magazine only takes what it needs
+	player["mag"] = 9
+	Sim.load_magazine(player)
+	check("a partial reload takes only the shortfall",
+		int(player["mag"]) == 12 and int(player["reserve"]["pistol"]) == 21,
+		"mag %d, reserve %d" % [player["mag"], player["reserve"]["pistol"]])
+	# and when it is gone, it is gone
+	player["reserve"]["pistol"] = 2
+	player["mag"] = 0
+	Sim.load_magazine(player)
+	check("the last rounds in the reserve still load", int(player["mag"]) == 2,
+		"mag %d, reserve %d" % [player["mag"], player["reserve"]["pistol"]])
+	player["mag"] = 0
+	var empty_reload: bool = Sim.load_magazine(player)
+	check("but an empty reserve loads nothing at all",
+		not empty_reload and int(player["mag"]) == 0, "reload returned %s" % empty_reload)
+	check("and he is correctly told he cannot reload",
+		not Sim.can_load_magazine(player), "can_reload false")
+	# each weapon keeps its own magazine: switching must not conjure one
+	player = Sim.create_player()
+	player["mag"] = 3
+	(player["mags"] as Dictionary)["pistol"] = 3
+	player["weapon"] = "shotgun"
+	player["mag"] = int((player["mags"] as Dictionary)["shotgun"])
+	check("the two weapons do not share a magazine",
+		int(player["mag"]) == 6 and int(player["mags"]["pistol"]) == 3,
+		"shotgun mag %d, pistol mag remembered as %d"
+			% [player["mag"], player["mags"]["pistol"]])
+
 	# ---- thief stays in bounds
 	player = Sim.create_player()
 	thief = Sim.create_thief()

@@ -668,20 +668,12 @@ func _input(event: InputEvent) -> void:
 		elif event.keycode == KEY_ENTER and state != "play":
 			reset()
 		elif event.keycode == KEY_1 and state == "play":
-			player["weapon"] = "pistol"
-			player["mag"] = Sim.WEAPONS["pistol"]["mag"]
-			player["reloading"] = 0.0
-			if player_actor != null:
-				player_actor.set_weapon("pistol")
+			_switch_weapon("pistol")
 		elif event.keycode == KEY_2 and state == "play":
-			player["weapon"] = "shotgun"
-			player["mag"] = Sim.WEAPONS["shotgun"]["mag"]
-			player["reloading"] = 0.0
-			if player_actor != null:
-				player_actor.set_weapon("shotgun")
+			_switch_weapon("shotgun")
 		elif event.keycode == KEY_R and state == "play":
 			var spec: Dictionary = Sim.WEAPONS[player["weapon"]]
-			if player["reloading"] <= 0.0 and player["mag"] < spec["mag"]:
+			if player["reloading"] <= 0.0 and Sim.can_load_magazine(player):
 				player["reloading"] = spec["reload"]
 				# Actor.RELOAD was merged into every character from the beginning and
 				# referenced nowhere — a clip the project paid for and never played.
@@ -709,6 +701,19 @@ func _move_axis() -> Vector2:
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
 		v.x += 1.0
 	return v.normalized() if v.length() > 1.0 else v
+
+
+## Each weapon keeps its OWN magazine. Switching used to hand you a full one, so however
+## tight the reserve was, tapping 1 / 2 refilled you and ammunition was never a resource.
+func _switch_weapon(w: String) -> void:
+	if String(player["weapon"]) == w:
+		return
+	(player["mags"] as Dictionary)[String(player["weapon"])] = int(player["mag"])
+	player["weapon"] = w
+	player["mag"] = int((player["mags"] as Dictionary).get(w, 0))
+	player["reloading"] = 0.0
+	if player_actor != null:
+		player_actor.set_weapon(w)
 
 
 # ------------------------------------------------------------------- update
@@ -769,7 +774,8 @@ func _process(delta: float) -> void:
 		if player["reloading"] > 0.0:
 			player["reloading"] -= delta
 			if player["reloading"] <= 0.0:
-				player["mag"] = Sim.WEAPONS[player["weapon"]]["mag"]
+				# out of the reserve, not out of thin air
+				Sim.load_magazine(player)
 		player["cd"] -= delta
 		if fire_held and player["cd"] <= 0.0 and player["reloading"] <= 0.0 \
 		and player["mag"] > 0:
@@ -885,8 +891,10 @@ func _drain_events() -> void:
 					# continuing through to you
 					_add_tracer(shot_from, wall["position"])
 					_add_impact(wall["position"], wall["normal"], false, false)
-				elif randf() <= clampf(1.0 - shot_from.distance_to(shot_to) * 0.02,
-						0.55, 1.0):
+				# No floor. The old 0.55 meant he hit better than half the time at any
+				# range, so keeping your distance bought you nothing.
+				elif randf() <= clampf(1.0 - shot_from.distance_to(shot_to) * 0.035,
+						0.05, 1.0):
 					_add_tracer(shot_from, shot_to)
 					Sim.damage_player(player, Sim.THIEF_DAMAGE, events)
 				else:
@@ -1157,7 +1165,10 @@ func _fire() -> void:
 					mult = float(HIT_ZONES[zone]["mult"])
 					_last_zone = String(HIT_ZONES[zone]["name"])
 				_last_mult = mult
-				Sim.damage_thief(thief, float(spec["dmg"]) * mult, events)
+				# Shot loses energy with distance. Pellets were doing their full damage
+				# at any range, so a shotgun was as lethal across the room as at the door.
+				var falloff: float = clampf(1.0 - origin.distance_to(end) / 28.0, 0.22, 1.0)
+				Sim.damage_thief(thief, float(spec["dmg"]) * mult * falloff, events)
 			# A mark on whatever it struck. The hit point has always been computed and then
 			# used ONLY as the tracer's end, so emptying a shotgun into a wardrobe left no
 			# sign of it — the single biggest reason shooting felt like it was happening to
@@ -1166,7 +1177,7 @@ func _fire() -> void:
 				int(spec["pellets"]) > 1, hit_thief)
 		_add_tracer(muzzle, end)
 	_drain_events()
-	if player["mag"] <= 0:
+	if player["mag"] <= 0 and Sim.can_load_magazine(player):
 		player["reloading"] = spec["reload"]
 		if player_actor != null:
 			player_actor.play_for(Actor.RELOAD, float(spec["reload"]))
@@ -1530,7 +1541,8 @@ func _refresh_hud() -> void:
 		else (Color(0.96, 0.62, 0.04) if player["hp"] > 25.0 else Color(0.94, 0.27, 0.27))
 	_lbl_weapon.text = spec["name"]
 	_lbl_ammo.text = "reloading" if player["reloading"] > 0.0 \
-		else "%d / %d" % [int(player["mag"]), int(spec["mag"])]
+		else "%d / %d  (%d)" % [int(player["mag"]), int(spec["mag"]),
+			int((player["reserve"] as Dictionary).get(String(player["weapon"]), 0))]
 	var stance := "STANDING"
 	if player["crouching"]:
 		stance = "CROUCHING"
@@ -1542,8 +1554,8 @@ func _refresh_hud() -> void:
 	# "running" is fair — a man breaking off and bolting is not subtle.
 	var tstate := "down" if not thief["alive"] else (
 		"running" if String(thief["mode"]) == "flee" else (
-			"hurting" if thief["hp"] <= 40.0 else (
-				"hit" if thief["hp"] < 100.0 else "unhurt")))
+			"hurting" if thief["hp"] <= Sim.THIEF_MAX_HP * 0.4 else (
+				"hit" if thief["hp"] < Sim.THIEF_MAX_HP else "unhurt")))
 	if _shot_fire or _shot_walk or _shot_frames != -1:
 		# capture mode only: the raw numbers underneath the state, so AI and movement can be
 		# read straight out of a frame instead of guessed at
