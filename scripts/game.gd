@@ -475,6 +475,7 @@ func _spawn_actors() -> void:
 		# he carries a pistol as well; _update_actors holsters it while he is loaded up
 		thief_actor.attach_weapon()
 		thief_actor.attach_kit()
+		thief_actor.attach_carry_pose()
 		thief_actor.set_weapon("pistol")
 
 	# a separate body so bullet rays can tell the thief from the scenery.
@@ -520,13 +521,18 @@ func _spawn_actors() -> void:
 ## Every prop is assembled from boxes and cylinders, so there is nothing to import
 ## and no licence to worry about. Each is modelled with its base at y = 0, which is
 ## what lets the same node drop straight onto the floor at either end.
-## Where a carried item's own origin sits relative to his hand, in his facing frame.
-## Each prop is modelled with its base at y = 0, so these hang it off the grip: the
-## laptop sits in the palm, the TV and the safe are carried by their top edge.
+## Where a carried item's own origin sits relative to his RIGHT hand, in his facing frame.
+## Each prop is modelled with its base at y = 0, so these drop it off the grip.
+##
+## RE-TUNED when the carry pose landed. Before it his arms hung at his sides, so these offsets
+## did all the work — the TV hung 0.60 m below the hand to reach his hip. With the arms
+## actually posed in front of him that double-compensated and left the TV at knee height.
+## X is the interesting axis now: his right hand is at x -0.22 and his left at +0.28, so
+## +0.25 or so from the right hand is where the middle of the load belongs.
 const CARRY_HANG := {
-	"TV": Vector3(0.06, -0.60, 0.05),
-	"Laptop": Vector3(0.02, -0.03, 0.07),
-	"Safe": Vector3(0.05, -0.47, 0.06),
+	"TV": Vector3(0.26, -0.14, 0.04),
+	"Laptop": Vector3(0.24, -0.07, 0.06),
+	"Safe": Vector3(0.26, -0.26, 0.04),
 }
 
 
@@ -1086,6 +1092,8 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 	thief_actor.update_weapon(_thief_aim(tp, sees))
 	# after update_weapon, because the kit follows bones the animation has just written
 	thief_actor.update_kit()
+	# the carry pose is a MESH concern only: the sim does not know or care how his arms look
+	thief_actor.set_carry(1.0 if thief.get("carry", "") != "" else 0.0)
 
 	if not thief["alive"]:
 		if thief_actor.has_clip(Actor.DEATH):

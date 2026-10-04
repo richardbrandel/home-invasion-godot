@@ -52,6 +52,7 @@ var _beanie: MeshInstance3D
 var _bag: MeshInstance3D
 var _gloves: Array[MeshInstance3D] = []
 var _kit_bones := {}
+var carry_pose: SkeletonModifier3D
 var _skeleton: Skeleton3D = null
 var _hand_bone := -1
 var _current := ""
@@ -465,6 +466,27 @@ func _cyl(r: float, top: float, h: float) -> CylinderMesh:
 ## burglar — the audit's point, and most of why the two characters are hard to tell apart
 ## at a glance. There is no clothed mesh to swap in, so the kit is built from primitives
 ## and ridden on the bones, exactly as both characters' weapons already are.
+## Pose the arms into a carry. Attached to the SKELETON, because a SkeletonModifier3D only
+## runs for the skeleton it belongs to, and because it has to run after the AnimationPlayer
+## has written the frame — which is exactly what that hook is for.
+func attach_carry_pose() -> void:
+	if _skeleton == null:
+		return
+	var script := load("res://scripts/carry_pose.gd")
+	if script == null:
+		push_warning("Actor: missing carry_pose.gd")
+		return
+	carry_pose = script.new() as SkeletonModifier3D
+	carry_pose.name = "CarryPose"
+	_skeleton.add_child(carry_pose)
+
+
+## 0 = arms as the animation leaves them, 1 = holding something in front.
+func set_carry(amount: float) -> void:
+	if carry_pose != null:
+		carry_pose.weight = clampf(amount, 0.0, 1.0)
+
+
 func attach_kit() -> void:
 	if root == null or _skeleton == null:
 		return
