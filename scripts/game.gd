@@ -135,6 +135,18 @@ var _flash_t := 0.0
 ## The police, who arrive from the street because a gunshot is what makes somebody call.
 var _siren: AudioStreamPlayer3D
 var _siren_t := 0.0
+## The van DRIVES. It was placed once and never referenced again, while the loss text
+## claimed it drove off — audit item 22, and the last place the world lied about itself.
+## It arrives from the street while the intruder waits at the threshold, and leaves when he
+## does. Parked for the whole of play, so the collision box under it stays honest.
+const VAN_ARRIVE := 2.0
+const VAN_LEAVE := 2.6
+const VAN_FAR := 34.0
+var _van: Node3D
+var _van_col: CollisionShape3D
+var _van_rest_z := 0.0
+var _van_phase := "parked"
+var _van_t := 0.0
 ## Set when he breaks off and runs, so the loss text can say how much he got away with
 ## rather than claiming he took everything.
 var _ran_off := false
@@ -205,6 +217,9 @@ func _ready() -> void:
 	process_priority = 100
 	_setup_environment()
 	House.build_all(self)
+	_van = find_child("Van", true, false) as Node3D
+	if _van != null:
+		_van_rest_z = _van.position.z
 	_build_collision()
 	_spawn_actors()
 	_build_hud()
@@ -415,11 +430,11 @@ func _build_collision() -> void:
 	var house := Sim.HOUSE
 	_add_box_at(body, house, 0.14, -0.06)                       # floor slab
 	_add_box_at(body, house, 0.22, House.WALL_TARGET_H + 0.11)  # ceiling slab
-	_add_box_at(body, Sim.VAN, 1.8, 0.9)                        # the van
+	_van_col = _add_box_at(body, Sim.VAN, 1.8, 0.9)             # the van
 
 
 ## Same as _add_box but with the box's vertical CENTRE given rather than its base.
-func _add_box_at(parent: Node3D, r: Rect2, h: float, centre_y: float) -> void:
+func _add_box_at(parent: Node3D, r: Rect2, h: float, centre_y: float) -> CollisionShape3D:
 	var cs := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
 	shape.size = Vector3(r.size.x, h, r.size.y)
@@ -427,6 +442,7 @@ func _add_box_at(parent: Node3D, r: Rect2, h: float, centre_y: float) -> void:
 	cs.position = Vector3(r.position.x + r.size.x * 0.5, centre_y,
 		r.position.y + r.size.y * 0.5)
 	parent.add_child(cs)
+	return cs
 
 
 func _add_box(parent: Node3D, r: Rect2, h: float) -> void:
@@ -629,6 +645,8 @@ func reset() -> void:
 	if _siren != null:
 		_siren.stop()
 		_siren_t = 0.0
+	_van_phase = "arriving"
+	_van_t = 0.0
 	_ran_off = false
 	_escaped_with = 0
 	msg = "DEFEND YOUR HOME   \u2014   [F] shoves at close range"
@@ -827,6 +845,7 @@ func _process(delta: float) -> void:
 		_flash_t -= delta
 		if _flash_t <= 0.0:
 			_flash.visible = false
+	_update_van(delta)
 	if _siren != null and _siren_t > 0.0:
 		_siren_t -= delta
 		if _siren_t <= 0.0:
@@ -937,6 +956,7 @@ func _drain_events() -> void:
 				msg_t = 2.0
 			"allStolen":
 				_ran_off = false
+				_start_van_leave()
 				state = "lose"
 				_show_overlay(false)
 			"shoved":
@@ -959,6 +979,7 @@ func _drain_events() -> void:
 				# everything, and the text has to say which one happened.
 				_ran_off = true
 				_escaped_with = 3 - Sim.remaining(loot)
+				_start_van_leave()
 				state = "lose"
 				_show_overlay(false)
 			"thiefDown":
@@ -1486,6 +1507,38 @@ func _try_shove() -> void:
 	_drain_events()
 
 
+## Drive the van in at the start and out at the end.
+##
+## It is moved by POSITION rather than by a tween, so it is deterministic and cannot be
+## left half-way by a restart. The collision box under it moves with it, or the parked van
+## would block rays somewhere the model no longer is.
+func _update_van(delta: float) -> void:
+	if _van == null:
+		return
+	var off := 0.0
+	if _van_phase == "arriving":
+		_van_t += delta
+		var u := clampf(_van_t / VAN_ARRIVE, 0.0, 1.0)
+		off = VAN_FAR * (1.0 - (u * u * (3.0 - 2.0 * u)))   # smoothstep in
+		if u >= 1.0:
+			_van_phase = "parked"
+	elif _van_phase == "leaving":
+		_van_t += delta
+		var u2 := clampf(_van_t / VAN_LEAVE, 0.0, 1.0)
+		off = VAN_FAR * u2 * u2                             # accelerates away
+		if u2 >= 1.0:
+			_van_phase = "gone"
+	_van.position.z = _van_rest_z + off
+	if _van_col != null:
+		_van_col.position.z = Sim.VAN.position.y + Sim.VAN.size.y * 0.5 + off
+
+
+func _start_van_leave() -> void:
+	if _van_phase != "gone":
+		_van_phase = "leaving"
+		_van_t = 0.0
+
+
 ## The police, heard from the street rather than on top of you.
 func _start_siren() -> void:
 	var st = _sfx.get("siren")
@@ -1661,6 +1714,6 @@ func _show_overlay(win: bool) -> void:
 		_ov_sub.text = ("He broke off and ran — %d of 3 with him." % _escaped_with) \
 			+ "  [ENTER] to play again"
 	elif player["alive"]:
-		_ov_sub.text = "He got everything into the van.  [ENTER] to play again"
+		_ov_sub.text = "The van drove off with everything.  [ENTER] to play again"
 	else:
 		_ov_sub.text = "You were killed defending the house.  [ENTER] to play again"
