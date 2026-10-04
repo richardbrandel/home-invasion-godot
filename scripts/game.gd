@@ -117,6 +117,8 @@ const HIT_ZONES := [
 const HIT_MULT_DEFAULT := 1.0
 ## How fast you can move while changing a magazine, as a fraction of normal pace.
 const RELOAD_PACE := 0.62
+const CASING_MAX := 24
+const SMOKE_MAX := 10
 
 var _crosshair: Control
 
@@ -132,6 +134,24 @@ var _mark_i := 0
 var _mark_mat: StandardMaterial3D
 var _flash: MeshInstance3D
 var _flash_t := 0.0
+## Ejected brass and muzzle smoke. The audit's item 14 lists "muzzle flash, smoke or shell
+## casings" together and only the flash existed.
+##
+## Both are POOLED: a shotgun blast ejects one casing and a puff, the pistol cycles four times
+## a second, and allocating nodes per shot would churn for the whole round.
+var _casings: Array[Dictionary] = []
+var _casing_pool: Array[MeshInstance3D] = []
+var _casing_i := 0
+var _casing_mat: StandardMaterial3D
+var _smokes: Array[Dictionary] = []
+var _smoke_pool: Array[MeshInstance3D] = []
+var _smoke_i := 0
+var _smoke_mat: StandardMaterial3D
+## The last direction the homeowner was shot FROM, in his own frame, so the HUD can point at
+## it. Audit item 13: `playerHit` had no case at all, so there was no damage direction.
+var _hit_from := 0.0
+var _hit_t := 0.0
+var _hit_mark: ColorRect
 ## The police, who arrive from the street because a gunshot is what makes somebody call.
 var _siren: AudioStreamPlayer3D
 var _siren_t := 0.0
@@ -225,6 +245,7 @@ func _ready() -> void:
 	_build_hud()
 	_build_audio()
 	_build_effects()
+	_add_hit_marker()
 	reset()
 	_build_loot()
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
@@ -854,10 +875,12 @@ func _process(delta: float) -> void:
 		if _flash_t <= 0.0:
 			_flash.visible = false
 	_update_van(delta)
+	_update_debris(delta)
 	if _siren != null and _siren_t > 0.0:
 		_siren_t -= delta
 		if _siren_t <= 0.0:
 			_siren.stop()
+	_update_hit_marker(delta)
 	_draw_minimap()
 
 	if msg_t > 0.0:
@@ -944,6 +967,16 @@ func _drain_events() -> void:
 				elif randf() <= clampf(1.0 - shot_from.distance_to(shot_to) * 0.035,
 						0.05, 1.0):
 					_add_tracer(shot_from, shot_to)
+					# Bearing to him in the homeowner's own frame: forward is (sin, cos),
+					# right is (-cos, sin), and atan2(right, forward) is the screen angle.
+					var d := (thief["pos"] as Vector2) - (player["pos"] as Vector2)
+					var fwd := Vector2(sin(yaw), cos(yaw))
+					var rgt := Vector2(-cos(yaw), sin(yaw))
+					_hit_from = atan2(d.dot(rgt), d.dot(fwd))
+					_hit_t = 1.1
+					if OS.get_cmdline_user_args().has("--dbg-hit"):
+						printerr("[hitmark] bearing %.2f rad, mark at %s"
+							% [_hit_from, _hit_mark.position])
 					Sim.damage_player(player, Sim.THIEF_DAMAGE, events)
 				else:
 					# it goes wide: end the tracer off to one side instead of on you
@@ -1216,6 +1249,11 @@ func _fire() -> void:
 		if m != Vector3.ZERO:
 			muzzle = m
 	_add_flash(muzzle)
+	# Brass and a puff of smoke, thrown to the shooter's right. Right, not left: the same
+	# convention the movement code uses, where the camera's right is -X at yaw 0.
+	var right := Vector3(-cos(yaw), 0.0, sin(yaw))
+	_add_casing(muzzle, right)
+	_add_smoke(muzzle)
 
 	var space := get_world_3d().direct_space_state
 	for i in int(spec["pellets"]):
@@ -1494,6 +1532,22 @@ func _update_door_sound() -> void:
 	_thief_door_z = z
 
 
+## A mark beside the crosshair pointing at whoever just shot you. The audit's item 13 calls
+## out the absence of damage direction: `playerHit` was appended and had no case at all, so
+## being shot gave you nothing but a falling number.
+func _add_hit_marker() -> void:
+	_hit_mark = ColorRect.new()
+	_hit_mark.color = Color(0.94, 0.25, 0.22, 0.92)
+	# PIXELS. These were written as 0.020 x 0.055 thinking in fractions of the screen, which
+	# made a mark 0.02 px across that never appeared in any capture.
+	_hit_mark.size = Vector2(10.0, 28.0)
+	_hit_mark.position = Vector2(0.5, 0.5)
+	_hit_mark.pivot_offset = Vector2(5.0, 14.0)
+	_hit_mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hit_mark.visible = false
+	_crosshair.add_child(_hit_mark)
+
+
 func _build_effects() -> void:
 	_flash = MeshInstance3D.new()
 	var q := QuadMesh.new()
@@ -1513,6 +1567,95 @@ func _build_effects() -> void:
 	_flash.material_override = m
 	_flash.visible = false
 	add_child(_flash)
+
+	_casing_mat = StandardMaterial3D.new()
+	_casing_mat.albedo_color = Color(0.62, 0.48, 0.16)
+	_casing_mat.metallic = 0.85
+	_casing_mat.roughness = 0.35
+	for i in CASING_MAX:
+		var c := MeshInstance3D.new()
+		var cb := BoxMesh.new()
+		cb.size = Vector3(0.010, 0.010, 0.024)
+		c.mesh = cb
+		c.material_override = _casing_mat
+		c.visible = false
+		add_child(c)
+		_casing_pool.append(c)
+
+	_smoke_mat = StandardMaterial3D.new()
+	# Pale and fairly opaque: at 0.40 alpha a grey puff over grey asphalt was invisible, which
+	# is exactly how it looked in the first capture after the texture went on.
+	_smoke_mat.albedo_color = Color(0.82, 0.82, 0.80, 0.72)
+	_smoke_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_smoke_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_smoke_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	var puff_tex = load("res://assets/textures/smoke_puff.png")
+	if puff_tex != null:
+		_smoke_mat.albedo_texture = puff_tex
+	for i in SMOKE_MAX:
+		var k := MeshInstance3D.new()
+		var pq := QuadMesh.new()
+		pq.size = Vector2(0.22, 0.22)
+		k.mesh = pq
+		k.material_override = _smoke_mat
+		k.visible = false
+		add_child(k)
+		_smoke_pool.append(k)
+
+
+## Brass out of the ejection port, thrown to the shooter's right and slightly up.
+func _add_casing(pos: Vector3, right: Vector3) -> void:
+	if _casing_pool.is_empty():
+		return
+	var c := _casing_pool[_casing_i]
+	_casing_i = (_casing_i + 1) % _casing_pool.size()
+	c.global_position = pos
+	c.rotation = Vector3(randf() * TAU, randf() * TAU, randf() * TAU)
+	c.visible = true
+	var v := right * randf_range(1.6, 2.6) + Vector3.UP * randf_range(1.4, 2.0)
+	v += Vector3(0, 0, 1) * randf_range(-0.5, 0.5)
+	_casings.append({"node": c, "v": v, "t": 1.8})
+
+
+func _add_smoke(pos: Vector3) -> void:
+	if _smoke_pool.is_empty():
+		return
+	var k := _smoke_pool[_smoke_i]
+	_smoke_i = (_smoke_i + 1) % _smoke_pool.size()
+	k.global_position = pos + Vector3(0, 0.03, 0)
+	k.scale = Vector3.ONE * 0.5
+	k.visible = true
+	_smokes.append({"node": k, "t": 0.55})
+
+
+func _update_debris(delta: float) -> void:
+	for i in range(_casings.size() - 1, -1, -1):
+		var d: Dictionary = _casings[i]
+		d["t"] = float(d["t"]) - delta
+		var v: Vector3 = d["v"]
+		v.y -= 9.8 * delta
+		d["v"] = v
+		var n: MeshInstance3D = d["node"]
+		n.global_position += v * delta
+		# spin as it tumbles
+		n.rotate_x(delta * 9.0)
+		n.rotate_z(delta * 6.0)
+		# the lawn is at y 0, so this is where brass stops
+		if n.global_position.y < 0.012:
+			n.global_position.y = 0.012
+			d["v"] = Vector3(v.x * 0.35, 0.0, v.z * 0.35)
+		if float(d["t"]) <= 0.0:
+			n.visible = false
+			_casings.remove_at(i)
+	for i in range(_smokes.size() - 1, -1, -1):
+		var puf: Dictionary = _smokes[i]
+		puf["t"] = float(puf["t"]) - delta
+		var n2: MeshInstance3D = puf["node"]
+		n2.scale = Vector3.ONE * (0.5 + (0.55 - float(puf["t"])) * 2.4)
+		n2.global_position += Vector3.UP * delta * 0.55
+		if float(puf["t"]) <= 0.0:
+			n2.visible = false
+			_smokes.remove_at(i)
 
 
 ## The non-lethal answer. A shove, not a shot.
@@ -1711,6 +1854,29 @@ func _refresh_hud() -> void:
 	if float(thief["alarm"]) >= 0.0:
 		var left := maxf(0.0, Sim.POLICE_TIME - float(thief["alarm"]))
 		_lbl_loot.text += "     POLICE  %d:%02d" % [int(left) / 60, int(left) % 60]
+
+
+## Place the damage mark around the crosshair, in the HUD's fixed design space.
+func _update_hit_marker(delta: float) -> void:
+	if _hit_mark == null:
+		return
+	if OS.get_cmdline_user_args().has("--dbg-hit"):
+		# verification only: hold it open long enough to photograph
+		_hit_t = maxf(_hit_t, 1.0)
+	if _hit_t <= 0.0:
+		_hit_mark.visible = false
+		return
+	_hit_t -= delta
+	var a := _hit_from
+	var dir := Vector2(sin(a), -cos(a))
+	# ABSOLUTE design coordinates, like every other child of the crosshair: the Control's own
+	# `position` is an OFFSET from rest, not the crosshair's location. Positioning this
+	# relatively put the mark in the top-left corner of the screen where nothing could see it,
+	# and it looked exactly like the mark not drawing at all.
+	_hit_mark.position = Vector2(800.0, 450.0) + dir * 62.0 - _hit_mark.size * 0.5
+	_hit_mark.rotation = a
+	_hit_mark.color.a = clampf(_hit_t / 1.1, 0.0, 1.0) * 0.92
+	_hit_mark.visible = true
 
 
 func _draw_minimap() -> void:

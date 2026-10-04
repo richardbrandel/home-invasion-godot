@@ -224,6 +224,31 @@ def muzzle_flash() -> None:
     save_rgba("muzzle_flash", px, S, S)
 
 
+
+def smoke_puff() -> None:
+    """RGBA. A soft round blob — a hard-edged quad reads as a grey SQUARE, which is what the
+    muzzle smoke did before this existed."""
+    S = 96
+    rnd = random.Random(97)
+    px = []
+    # a few overlapping lobes so the edge is not a perfect circle
+    lobes = [(0.50, 0.50, 0.42), (0.36, 0.44, 0.26), (0.63, 0.58, 0.24), (0.52, 0.35, 0.22)]
+    for y in range(S):
+        for x in range(S):
+            u = x / S
+            v = y / S
+            a = 0.0
+            for (cx, cy, r) in lobes:
+                d = math.hypot(u - cx, v - cy)
+                a += max(0.0, 1.0 - d / r) ** 1.6
+            a = min(1.0, a)
+            n = rnd.randint(-8, 8)
+            c = 208 + n
+            px.append((max(0, min(255, c)), max(0, min(255, c)),
+                       max(0, min(255, c - 6)), int(215 * a)))
+    save_rgba("smoke_puff", px, S, S)
+
+
 def main() -> None:
     print("writing assets/textures/")
     wood_floor()
@@ -233,6 +258,7 @@ def main() -> None:
     shingles()
     bullet_hole()
     muzzle_flash()
+    smoke_puff()
     print("all tileable by construction — integer-frequency sinusoids plus fine grain")
 
 
