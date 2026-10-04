@@ -282,6 +282,28 @@ func _init() -> void:
 	check("but he does fire once he has settled",
 		first_shot >= 0.0 and first_shot < 1.5, "first shot at %.2fs" % first_shot)
 
+	# ---- and being shot interrupts him
+	_banner("a hit stops the intruder")
+	player = Sim.create_player()
+	thief = Sim.create_thief()
+	loot = Sim.create_loot()
+	thief["pos"] = Vector2(-5.0, -12.0)
+	thief["prev"] = thief["pos"]
+	thief["route"] = [Vector2(0.0, -12.0)]
+	thief["aim"] = Sim.THIEF_AIM_TIME
+	events = []
+	Sim.damage_thief(thief, 20.0, events)
+	check("a hit staggers him", float(thief["stagger"]) > 0.0,
+		"stagger=%.2f" % float(thief["stagger"]))
+	check("and it takes his sight picture away", float(thief["aim"]) == 0.0,
+		"aim=%.2f" % float(thief["aim"]))
+	var before: Vector2 = thief["pos"]
+	events = []
+	Sim.step_thief(thief, player, loot, events, dt)
+	check("and he does not move while staggered",
+		(thief["pos"] as Vector2).distance_to(before) < 0.001,
+		"moved %.4f m" % (thief["pos"] as Vector2).distance_to(before))
+
 	# ---- thief stays in bounds
 	player = Sim.create_player()
 	thief = Sim.create_thief()

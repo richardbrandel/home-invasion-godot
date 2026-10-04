@@ -443,7 +443,7 @@ static func create_thief() -> Dictionary:
 		"hp": float(THIEF_HEALTH), "alive": true,
 		"mag": THIEF_MAG, "cd": 1.2, "reloading": 0.0, "think": 2.0,
 		"carry": "", "target": "", "route": [], "mode": "hunt",
-		"stuck_t": 0.0, "aim": 0.0,
+		"stuck_t": 0.0, "aim": 0.0, "stagger": 0.0, "hits": 0,
 	}
 
 static func create_loot() -> Array[Dictionary]:
@@ -532,7 +532,14 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 	var route: Array = thief["route"]
 	var speed_scale: float = thief.get("speed_scale", 1.0)
 	thief["step"] = 0.0
-	while not route.is_empty() and float(thief["think"]) <= 0.0:
+	# A hit stops him where he stands. He is not being teleported or paused for the camera:
+	# a person who has just been shot breaks stride, and that interruption is the whole
+	# reason a firefight reads as a firefight rather than two men standing still trading
+	# numbers.
+	if float(thief["stagger"]) > 0.0:
+		thief["stagger"] = maxf(0.0, float(thief["stagger"]) - dt)
+	while not route.is_empty() and float(thief["think"]) <= 0.0 \
+			and float(thief["stagger"]) <= 0.0:
 		var wp: Vector2 = route[0]
 		# The homeowner can stand exactly ON a waypoint, and the two bodies then can
 		# never get nearer than the sum of their radii — so the intruder would orbit
@@ -621,6 +628,14 @@ static func damage_thief(thief: Dictionary, dmg: float, events: Array) -> bool:
 	if not thief["alive"]:
 		return false
 	thief["hp"] -= dmg
+	# A gunshot wound is a behavioural event, not just a number going down. Nothing used to
+	# consult hp except the lethal check, so a man at 1 hp walked, aimed and fired exactly
+	# like a man at 100 — no flinch, no stagger, no reaction of any kind.
+	thief["stagger"] = maxf(float(thief.get("stagger", 0.0)),
+		clampf(dmg * 0.035, 0.35, 1.4))
+	# his sight picture is gone: he has to re-settle before he can shoot again
+	thief["aim"] = 0.0
+	thief["hits"] = int(thief.get("hits", 0)) + 1
 	if thief["hp"] <= 0.0:
 		thief["hp"] = 0.0
 		thief["alive"] = false

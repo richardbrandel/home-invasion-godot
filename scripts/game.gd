@@ -839,6 +839,16 @@ func _drain_events() -> void:
 				state = "lose"
 				_show_overlay(false)
 			"thiefDown":
+				# Whatever he was carrying falls where he does, rather than vanishing with
+				# him. It goes back into the world at his position, so the valuables are
+				# still findable after the round is won.
+				if String(thief["carry"]) != "":
+					for l in loot:
+						if String(l["label"]) == String(thief["carry"]):
+							l["taken"] = false
+							l["delivered"] = false
+							l["pos"] = thief["pos"]
+					thief["carry"] = ""
 				state = "win"
 				_show_overlay(true)
 			"playerDown":

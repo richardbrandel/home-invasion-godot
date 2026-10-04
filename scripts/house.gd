@@ -22,6 +22,9 @@ const CITY_SCALE := 2.5
 ## How far to sink the city road tiles so their running surface sits on the lawn rather
 ## than on top of their own raised base.
 const ROAD_SINK := 0.22
+## The restaurant door leaf needs its own scale: at House.SCALE it comes out taller than the
+## 2 m wall it hangs in.
+const DOOR_SCALE := 0.34
 const A := "res://assets/kaykit/"
 
 # KayKit's modular wall panel is 4.00 x 4.00 x 0.50 m at source scale.
@@ -309,7 +312,12 @@ static func build_wall_run(parent: Node3D, run: Rect2, open_bays := {}) -> void:
 		# separate wall runs (Sim.DOOR_GAP), not a bay inside one, so a `wall_doorway`
 		# branch here could never be reached — it was dead code until 2026-10-04. An
 		# actual door is ROADMAP item 17.
-		var model := "wall_window_open" if open_bays.has(i) else "wall"
+		# Alternate the glazing. A hole in every window is a large part of why the exterior
+		# read as a film set; `wall_window_closed` has been on disk unreferenced. Odd bays
+		# stay open so you can still see through some of them.
+		var model := "wall"
+		if open_bays.has(i):
+			model = "wall_window_open" if (i % 2) == 1 else "wall_window_closed"
 
 		var t := (float(i) + 0.5) * step
 		var x: float
@@ -388,6 +396,20 @@ static func build_furniture(parent: Node3D) -> void:
 
 # ------------------------------------------------------------- exterior
 static func build_exterior(parent: Node3D) -> void:
+	var house := Sim.HOUSE
+	# The front door itself. Sim.DOOR_GAP is a 2 m hole in the south wall and there was
+	# nothing in it — door_A and door_B have been on disk unreferenced from the start, and
+	# the house's only entrance was a rectangular gap. Left standing open, because the
+	# intruder has already come through it.
+	# DOOR_SCALE is not House.SCALE: at 0.5 the leaf comes out taller than the 2 m wall it
+	# hangs in and sticks up above the eaves.
+	var door := place(parent, "restaurant", "door_A",
+		Vector3((Sim.DOOR_GAP.x + Sim.DOOR_GAP.y) * 0.5, 0,
+			house.end.y - Sim.WALL_THICKNESS * 0.5),
+		deg_to_rad(-74.0), true, Vector3(DOOR_SCALE, DOOR_SCALE, DOOR_SCALE))
+	if door != null:
+		door.name = "FrontDoor"
+
 	# lawn
 	var lawn := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
