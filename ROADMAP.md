@@ -2,6 +2,14 @@
 
 ## Progress
 
+- **The van drives — DONE** (2026-10-04). Audit item 22, and the last place the world lied
+  about itself. It arrives from the street while the intruder waits at the threshold — the
+  dwell and the approach are the same two seconds — and leaves when he does, on both loss
+  endings. Moved by position, so a restart cannot leave it half-way, and `off` is exactly
+  zero at rest so it returns to where it was built by construction. The loss text is honest
+  again. **Still open from the same item:** it is a station wagon, because the pack has no
+  van model.
+
 - **The intruder reads as a burglar — DONE** (2026-10-04). Audit item 23. Beanie, gloves and a
   holdall ridden on the bones, plus a darkened body material — which is the part that does
   the work, because the mesh is bare skin from the collarbones down and a hat alone leaves a
