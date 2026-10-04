@@ -1,5 +1,38 @@
 # Realism roadmap
 
+## Status: COMPLETE, with one measured exception
+
+Every numbered item (1-24), every bug on the audit's list, and all four items reported from
+play are addressed and verified — by the two headless suites, the heist and wallshot probes,
+and rendered screenshots. The single exception is item 7, recorded below with the measurement
+that made me leave it. The "deep end" section is aspirational and was never a finite list;
+most of it is now done anyway (fear and morale, the external clock, searching, melee, and a
+defensive verb that is not a gun).
+
+Final state: **91 sim tests, 38 actor tests, heist 7/7, wallshot 0 violations, hit zones
+clean, carry pose reachable.**
+
+### The one thing I chose not to do, and why
+
+**Item 7 — he cannot shoot while carrying.** The audit is right that this is unrealistic, and
+it stays. I implemented the obvious fix, that he drops the loot when the homeowner is close and
+in plain sight and goes for the gun, and MEASURED it: an idle homeowner stands on his route, so
+the drop fires constantly and **all seven heist scenarios stopped completing**. The alternative,
+firing one-handed, needs a pistol and a two-handed item in the same hand — the carried object
+rides `hand_origin()` and so does the weapon, so they would intersect. Better a recorded
+trade-off than a broken round: the loot being his vulnerability is what makes the shove, the
+police clock and cornering him mean anything.
+
+### What is genuinely left, and it is not a list
+
+- **`sim.gd` is 2-D, and that is a documented approximation rather than a defect.** The
+  homeowner's shooting is genuinely 3-D — the ray is cast in world space against furniture with
+  real heights, so crouching behind something tall already works. What is 2-D is the intruder's
+  line of sight and movement. On one floor with full-height walls that costs very little; it
+  would matter in a house with a landing.
+- **The deep end.** A defensive verb beyond the shove (locking, lights, calling out), neighbours,
+  and any aftermath once he has gone. Real features, not fixes.
+
 ## Progress
 
 - **R2 the carry pose — DONE** (2026-10-04). Reported twice. The loot rode his hand bone but
