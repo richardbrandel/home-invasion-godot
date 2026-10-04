@@ -2,6 +2,12 @@
 
 ## Progress
 
+- **The intruder reads as a burglar — DONE** (2026-10-04). Audit item 23. Beanie, gloves and a
+  holdall ridden on the bones, plus a darkened body material — which is the part that does
+  the work, because the mesh is bare skin from the collarbones down and a hat alone leaves a
+  naked man in a hat. He is now a black-clad figure with a bag, unmistakable against the
+  homeowner's navy suit.
+
 - **Melee, and a defensive verb that is not a gun — DONE** (2026-10-04). [F] shoves: no
   damage, 1.2 s stagger, fear, 0.45 m of knockback, and he DROPS what he is carrying — the
   only way to recover a valuable without killing him. Needs 2.5 s to pick it back up, which
