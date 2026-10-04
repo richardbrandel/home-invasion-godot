@@ -171,6 +171,24 @@ const SEARCH_RANGE := 1.2     # how close he has to be to search it
 ## the threat of police to win, because they take him away rather than stopping him. He
 ## simply gets away with less.
 const POLICE_TIME := 110.0
+## The homeowner's OTHER defensive verb, and at 1-2 m the only sensible one. A home invasion
+## at arm's length stops being a shooting problem and becomes a fight for the gun, and the
+## only thing this game let you do at that range was pull the trigger — which is a lethal
+## answer to a problem that does not have to be one, and part of why the only two endings
+## were his death or yours.
+##
+## It does NO damage. It staggers him, frightens him, and makes him drop what he is holding,
+## which is the only way to get a valuable back without killing anybody.
+const SHOVE_RANGE := 1.9
+const SHOVE_ARC := 0.6        # radians either side of straight ahead
+const SHOVE_STAGGER := 1.2
+const SHOVE_FEAR := 2.0
+const SHOVE_PUSH := 0.45      # metres he is driven back
+const SHOVE_CD := 0.8
+## How long he is off balance and cannot pick anything up again. WITHOUT THIS THE SHOVE IS
+## NEARLY POINTLESS: he is shoved 0.45 m and the grab range is 1.4 m, so he re-took the item
+## on the very next frame — measured, not guessed. He has to stoop for it.
+const REGRAB_TIME := 2.5
 
 
 ## Tell him he is being shot at. Called by the game when the homeowner fires; `loudness`
@@ -488,7 +506,7 @@ static func create_player() -> Dictionary:
 		"pos": Vector2(0, -10.6), "yaw": 0.0, "pitch": 0.24,
 		"hp": THIEF_MAX_HP, "alive": true, "weapon": "pistol",
 		"crouching": false, "sprinting": false, "vel": Vector2.ZERO,
-		"mag": 12, "mags": {"pistol": 12, "shotgun": 6},
+		"mag": 12, "mags": {"pistol": 12, "shotgun": 6}, "shove_cd": 0.0,
 		"reserve": RESERVE.duplicate(), "cd": 0.0, "reloading": 0.0,
 	}
 
@@ -515,6 +533,50 @@ static func can_load_magazine(player: Dictionary) -> bool:
 		and int(player["mag"]) < int(WEAPONS[w]["mag"])
 
 
+## Drive him back and make him drop what he is carrying. Returns true if it landed.
+##
+## In sim.gd so it is testable: this is a gameplay rule with a range, an arc and a cooldown,
+## and the game layer is not reachable from the harness.
+static func shove(player: Dictionary, thief: Dictionary, loot: Array, events: Array) -> bool:
+	if not thief["alive"] or bool(thief.get("escaped", false)):
+		return false
+	if float(player["shove_cd"]) > 0.0:
+		return false
+	var to: Vector2 = (thief["pos"] as Vector2) - (player["pos"] as Vector2)
+	if to.length() > SHOVE_RANGE or to.length() < 0.001:
+		return false
+	# He has to be roughly in FRONT of you; you cannot shove a man behind your own back.
+	# (sin, cos) and not (cos, sin): this is the same forward convention the movement code
+	# uses, where yaw 0 faces +Z. Getting it round the wrong way would have made the arc
+	# ninety degrees out and the shove would land on people beside you.
+	var facing := Vector2(sin(float(player["yaw"])), cos(float(player["yaw"])))
+	if facing.dot(to.normalized()) < cos(SHOVE_ARC):
+		return false
+
+	player["shove_cd"] = SHOVE_CD
+	thief["stagger"] = maxf(float(thief["stagger"]), SHOVE_STAGGER)
+	thief["aim"] = 0.0
+	thief["fear"] = minf(float(thief["fear"]) + SHOVE_FEAR, 8.0)
+	thief["pos"] = resolve_circle((thief["pos"] as Vector2) + to.normalized() * SHOVE_PUSH,
+		THIEF_RADIUS)
+	thief["route"] = []
+	# he has to stoop for whatever he just dropped, or he simply picks it straight back up
+	thief["regrab"] = REGRAB_TIME
+
+	var dropped := String(thief["carry"])
+	if dropped != "":
+		for l in loot:
+			if String(l["label"]) == dropped:
+				# back into the world where he was standing — and he knows where it is
+				l["taken"] = false
+				l["delivered"] = false
+				l["pos"] = thief["pos"]
+				l["known"] = true
+		thief["carry"] = ""
+	events.append({"type": "shoved", "dropped": dropped})
+	return true
+
+
 static func create_thief() -> Dictionary:
 	return {
 		"pos": DROP + Vector2(0, 0.5), "prev": DROP + Vector2(0, 0.5), "yaw": PI,
@@ -523,7 +585,7 @@ static func create_thief() -> Dictionary:
 		"carry": "", "target": "", "route": [], "mode": "hunt",
 		"stuck_t": 0.0, "aim": 0.0, "stagger": 0.0, "hits": 0,
 		"fear": 0.0, "escaped": false, "last_seen": Vector2.ZERO, "speed": 0.0,
-		"searched": [], "alarm": -1.0, "sirens": false,
+		"searched": [], "alarm": -1.0, "sirens": false, "regrab": 0.0,
 	}
 
 static func create_loot() -> Array[Dictionary]:
@@ -550,6 +612,7 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 	thief["cd"] -= dt
 	if thief["reloading"] > 0.0:
 		thief["reloading"] -= dt
+	thief["regrab"] = maxf(0.0, float(thief["regrab"]) - dt)
 	if thief["escaped"]:
 		return false
 
@@ -624,7 +687,8 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 				tgt = best
 				thief["route"] = route_to(nearest_node(tpos), best["node"])
 				(thief["route"] as Array).append(best["pos"])
-			if tpos.distance_to(tgt["pos"]) < GRAB_RANGE:
+			if tpos.distance_to(tgt["pos"]) < GRAB_RANGE \
+					and float(thief["regrab"]) <= 0.0:
 				tgt["taken"] = true
 				thief["carry"] = tgt["label"]
 				events.append({"type": "grabbed", "label": tgt["label"]})

@@ -193,6 +193,9 @@ var _shot_fire := false
 ## this — there is no keyboard in a capture — so anything about how the homeowner walks,
 ## accelerates or carries momentum was unverifiable.
 var _shot_walk := false
+## Keep trying to shove during a capture. Close-range combat is otherwise unphotographable
+## for the same reason movement was: there is no keyboard.
+var _shot_shove := false
 
 
 func _ready() -> void:
@@ -254,6 +257,8 @@ func _ready() -> void:
 			_shot_fire = true
 		if a == "--shot-walk":
 			_shot_walk = true
+		if a == "--shot-shove":
+			_shot_shove = true
 		# force the fallback scheme, so "does reverting still work" is checkable
 		if a == "--aim=fixed":
 			aim_cone = false
@@ -625,7 +630,7 @@ func reset() -> void:
 		_siren_t = 0.0
 	_ran_off = false
 	_escaped_with = 0
-	msg = "DEFEND YOUR HOME"
+	msg = "DEFEND YOUR HOME   \u2014   [F] shoves at close range"
 	msg_t = 2.4
 	yaw = 0.0
 	pitch = 0.03
@@ -677,6 +682,8 @@ func _input(event: InputEvent) -> void:
 			_switch_weapon("pistol")
 		elif event.keycode == KEY_2 and state == "play":
 			_switch_weapon("shotgun")
+		elif event.keycode == KEY_F and state == "play":
+			_try_shove()
 		elif event.keycode == KEY_R and state == "play":
 			var spec: Dictionary = Sim.WEAPONS[player["weapon"]]
 			if player["reloading"] <= 0.0 and Sim.can_load_magazine(player):
@@ -731,6 +738,8 @@ func _process(delta: float) -> void:
 		var axis := _move_axis()
 		if _shot_walk:
 			axis = Vector2(0.0, -1.0)   # forward
+		if _shot_shove:
+			_try_shove()
 		player["crouching"] = Input.is_key_pressed(KEY_C) or Input.is_key_pressed(KEY_CTRL)
 		player["sprinting"] = (Input.is_key_pressed(KEY_SHIFT) or _shot_walk) \
 			and not player["crouching"] and axis.length() > 0.0
@@ -783,6 +792,7 @@ func _process(delta: float) -> void:
 				# out of the reserve, not out of thin air
 				Sim.load_magazine(player)
 		player["cd"] -= delta
+		player["shove_cd"] = maxf(0.0, float(player["shove_cd"]) - delta)
 		if fire_held and player["cd"] <= 0.0 and player["reloading"] <= 0.0 \
 		and player["mag"] > 0:
 			_fire()
@@ -928,6 +938,15 @@ func _drain_events() -> void:
 				_ran_off = false
 				state = "lose"
 				_show_overlay(false)
+			"shoved":
+				# This is the moment the game most needed a sentence: you have just done
+				# something the HUD has never had a word for.
+				if String(ev["dropped"]) != "":
+					msg = "You knocked the %s out of his hands!" % ev["dropped"]
+					msg_t = 2.2
+				else:
+					msg = "You drove him back"
+					msg_t = 1.2
 			"sirens":
 				# Not a win and not a loss: they take him away rather than stopping him,
 				# so what he is holding goes with him.
@@ -1452,6 +1471,16 @@ func _build_effects() -> void:
 	_flash.material_override = m
 	_flash.visible = false
 	add_child(_flash)
+
+
+## The non-lethal answer. A shove, not a shot.
+func _try_shove() -> void:
+	events = []
+	if Sim.shove(player, thief, loot, events):
+		_play_at("impact", Vector3(thief["pos"].x, 1.2, thief["pos"].y), 0.0)
+		if player_actor != null:
+			player_actor.play_once(Actor.SHOOT)
+	_drain_events()
 
 
 ## The police, heard from the street rather than on top of you.

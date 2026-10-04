@@ -516,6 +516,78 @@ func _init() -> void:
 		float(thief["fear"]) >= Sim.FEAR_FLEE,
 		"fear=%.1f, threshold=%.1f" % [thief["fear"], Sim.FEAR_FLEE])
 
+	# ---- what you can do at arm's length other than shoot him
+	_banner("the shove")
+	player = Sim.create_player()
+	thief = Sim.create_thief()
+	loot = Sim.create_loot()
+	player["pos"] = Vector2(0.0, -11.0)
+	player["yaw"] = 0.0                     # yaw 0 faces +Z
+	thief["pos"] = Vector2(0.0, -9.0)       # 2.0 m in front, out of reach
+	events = []
+	check("out of reach a shove does nothing",
+		not Sim.shove(player, thief, loot, events),
+		"2.0 m away, reach is %.1f m" % Sim.SHOVE_RANGE)
+
+	# in range but behind you
+	player["yaw"] = PI
+	thief["pos"] = Vector2(0.0, -9.6)
+	events = []
+	check("and you cannot shove a man behind your own back",
+		not Sim.shove(player, thief, loot, events), "facing away, 1.4 m")
+
+	# properly in front, and in reach
+	player["yaw"] = 0.0
+	var hp_before: float = thief["hp"]
+	events = []
+	var landed: bool = Sim.shove(player, thief, loot, events)
+	var pushed_to: float = (thief["pos"] as Vector2).y
+	check("in reach and in front it lands", landed, "landed=%s" % landed)
+	check("it staggers him hard", float(thief["stagger"]) >= Sim.SHOVE_STAGGER,
+		"stagger=%.2f s" % thief["stagger"])
+	check("it wounds him not at all", float(thief["hp"]) == hp_before,
+		"hp %.1f -> %.1f" % [hp_before, thief["hp"]])
+	check("and it drives him back", pushed_to > -9.6,
+		"from -9.60 m to %.2f m" % pushed_to)
+	events = []
+	check("but you cannot do it twice in a row",
+		not Sim.shove(player, thief, loot, events),
+		"cooldown is %.1f s" % Sim.SHOVE_CD)
+
+	# and it is the only way to take something back off him without killing him
+	thief = Sim.create_thief()
+	loot = Sim.create_loot()
+	thief["pos"] = Vector2(0.0, -9.6)
+	thief["carry"] = "Laptop"
+	loot[1]["taken"] = true
+	player["shove_cd"] = 0.0
+	events = []
+	var got: bool = Sim.shove(player, thief, loot, events)
+	check("shoving a laden intruder makes him drop it",
+		got and String(thief["carry"]) == "", "carry now '%s'" % thief["carry"])
+	check("and the valuable is back in the world where he stood",
+		not bool(loot[1]["taken"]) and not bool(loot[1]["delivered"]),
+		"taken=%s delivered=%s" % [loot[1]["taken"], loot[1]["delivered"]])
+	# and he must not simply snatch it straight back off the floor
+	thief["think"] = 0.0
+	thief["stagger"] = 0.0
+	events = []
+	for n in 30:
+		Sim.step_thief(thief, player, loot, events, dt)
+	check("and he cannot pick it straight back up",
+		String(thief["carry"]) == "", "carry='%s' half a second later" % thief["carry"])
+	# but he does come back for it once he has recovered
+	thief["stagger"] = 0.0
+	var back := false
+	for n in int(20.0 / dt):
+		thief["stagger"] = 0.0
+		Sim.step_thief(thief, player, loot, events, dt)
+		if String(thief["carry"]) == "Laptop":
+			back = true
+			break
+	check("though he does come back for it", back,
+		"carrying '%s' again" % thief["carry"])
+
 	# ---- thief stays in bounds
 	player = Sim.create_player()
 	thief = Sim.create_thief()
