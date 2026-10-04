@@ -156,7 +156,12 @@ static func build_floors(parent: Node3D) -> void:
 		for iz in nz:
 			var x := kx0 + (float(ix) + 0.5) * tile
 			var z := kz0 + (float(iz) + 0.5) * tile
-			place(parent, "restaurant", "floor_kitchen", Vector3(x, 0.015, z), 0.0, false)
+			var kf := place(parent, "restaurant", "floor_kitchen", Vector3(x, 0.015, z), 0.0, false)
+			# NOT KayKit's own checkerboard tile. See tools/gen-textures.py kitchen_tile().
+			if kf != null:
+				var km := _textured("res://assets/textures/floor_tile.png", 3.0, 3.0, 0.85)
+				for c in kf.find_children("*", "MeshInstance3D", true, false):
+					(c as MeshInstance3D).material_override = km
 
 
 # ---------------------------------------------------------------- walls
@@ -423,6 +428,52 @@ const FURNITURE_MODEL := {
 }
 
 
+static var _rug_mat: StandardMaterial3D
+
+
+static func use_rug_texture(inst: Node3D) -> void:
+	if inst == null:
+		return
+	if _rug_mat == null:
+		_rug_mat = StandardMaterial3D.new()
+		_rug_mat.albedo_color = Color(0.36, 0.30, 0.31)
+		_rug_mat.roughness = 1.0
+	for c in inst.find_children("*", "MeshInstance3D", true, false):
+		(c as MeshInstance3D).material_override = _rug_mat
+
+
+## A skirting board around every wall run.
+##
+## A box the footprint of the wall plus 3 cm in each direction, so it protrudes 1.5 cm past
+## each FACE of the wall and reads as a baseboard on both sides at once. One node per run
+## rather than two per wall, and it follows the door gap for free because the south wall is
+## already split into two runs either side of it.
+static func build_skirting(parent: Node3D) -> void:
+	var m := _flat(Color(0.94, 0.93, 0.91))
+	for w in Sim.WALLS:
+		var sk := MeshInstance3D.new()
+		var b := BoxMesh.new()
+		b.size = Vector3(w.size.x + 0.03, 0.11, w.size.y + 0.03)
+		sk.mesh = b
+		sk.position = Vector3(w.position.x + w.size.x * 0.5, 0.055,
+			w.position.y + w.size.y * 0.5)
+		sk.material_override = m
+		parent.add_child(sk)
+
+
+## Wall art, plants, books and appliances. NOT solid — see Sim.DECOR for why this is a
+## separate list from FURNITURE.
+static func build_decor(parent: Node3D) -> void:
+	for d in Sim.DECOR:
+		var spec: Array = d["model"]
+		var inst := place(parent, spec[0], spec[1], d["pos"], deg_to_rad(float(d.get("yaw", 0.0))),
+			bool(d.get("ground", true)))
+		if inst == null:
+			continue
+		# A picture frame owns no material of its own worth keeping, and several of them are
+		# the same atlas as the walls; leave them be, they read fine.
+
+
 static func build_furniture(parent: Node3D) -> void:
 	for f in Sim.FURNITURE:
 		var kind: String = f["kind"]
@@ -435,7 +486,10 @@ static func build_furniture(parent: Node3D) -> void:
 			r.position.y + r.size.y * 0.5)
 		if kind == "rug":
 			# flat: sits just above the floor, no grounding
-			place(parent, spec[0], spec[1], Vector3(centre.x, 0.02, centre.z), 0.0, false)
+			var rug := place(parent, spec[0], spec[1], Vector3(centre.x, 0.02, centre.z), 0.0, false)
+			# `rug_rectangle_A`'s own texture is a black-and-white CHECKERBOARD, which reads as
+			# a missing texture rather than a rug. Richard spotted it immediately.
+			use_rug_texture(rug)
 		else:
 			place(parent, spec[0], spec[1], centre)
 
@@ -528,6 +582,8 @@ static func build_all(parent: Node3D) -> void:
 	build_walls(parent)
 	build_ceiling(parent)
 	build_furniture(parent)
+	build_skirting(parent)
+	build_decor(parent)
 
 
 ## The street and the houses around it.

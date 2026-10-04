@@ -113,6 +113,32 @@ def driveway() -> None:
     save("driveway", px)
 
 
+def kitchen_tile() -> None:
+    """A pale tiled kitchen floor.
+
+    KayKit's own `floor_kitchen` model is a black-and-white CHECKERBOARD. It was used
+    deliberately, "only where a kitchen actually is", but Richard flagged it in play and he
+    is right: at room scale it reads as a missing texture, not as a floor. Same idea done as
+    a real floor — light tiles, thin grout, gentle per-tile variation, no checkerboard.
+    """
+    rnd = random.Random(91)
+    TILE = 128                      # 4 x 4 across the image, so it wraps exactly
+    px = []
+    for y in range(SIZE):
+        for x in range(SIZE):
+            gx = min(x % TILE, TILE - 1 - (x % TILE))
+            gy = min(y % TILE, TILE - 1 - (y % TILE))
+            edge = min(gx, gy)
+            # tone keyed on the TILE, not the pixel, so each tile is one flat colour
+            k = ((x // TILE) * 7 + (y // TILE) * 13) % 5
+            c = mix((198, 194, 188), (216, 212, 205), k / 4.0)
+            if edge < 2:
+                c = mix(c, (152, 148, 142), 1.0 - edge / 2.0)
+            n = rnd.randint(-5, 5)
+            px.append(tuple(max(0, min(255, v + n)) for v in c))
+    save("floor_tile", px)
+
+
 def plaster() -> None:
     """Ceiling. Very subtle — it should read as a surface, not a pattern."""
     rnd = random.Random(41)
@@ -254,6 +280,7 @@ def main() -> None:
     wood_floor()
     lawn()
     driveway()
+    kitchen_tile()
     plaster()
     shingles()
     bullet_hole()

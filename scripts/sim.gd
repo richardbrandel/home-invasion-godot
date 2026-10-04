@@ -70,6 +70,38 @@ static var FURNITURE: Array[Dictionary] = [
 	{"rect": Rect2(0.70, -15.60, 0.60, 0.60), "h": 1.30, "kind": "cabinet"},
 ]
 
+## Decor: drawn, NOT solid. Wall art, plants, books, appliances on a counter.
+##
+## Deliberately a SEPARATE list from FURNITURE. `_solids()` feeds the intruder's collision,
+## so anything added to FURNITURE can block a route and stall a heist — a picture frame or a
+## cactus must never do that. Add to DECOR unless you actually want the player to collide
+## with it.
+##
+## `pos` is the CENTRE of the model in x/z (or the mount point for wall art), `y` is the
+## height above the floor, and `ground` false means "respect y, do not drop me to the floor".
+static var DECOR: Array[Dictionary] = [
+	# ---- living room (west of centre, front)
+	{"model": ["furniture", "pictureframe_large_A"], "pos": Vector3(-7.84, 1.55, -10.4), "yaw": 90.0, "ground": false},
+	{"model": ["furniture", "pictureframe_medium"], "pos": Vector3(-5.6, 1.62, -8.16), "yaw": 180.0, "ground": false},
+	{"model": ["furniture", "cactus_medium_A"], "pos": Vector3(-7.5, 0.0, -8.5), "yaw": 0.0},
+	{"model": ["furniture", "cactus_small_B"], "pos": Vector3(-4.5, 0.0, -13.4), "yaw": 35.0},
+	{"model": ["furniture", "book_set"], "pos": Vector3(-5.9, 0.44, -11.8), "yaw": 20.0},
+
+	# ---- kitchen (east of centre, front)
+	{"model": ["restaurant", "stove_multi"], "pos": Vector3(7.1, 0.0, -9.6), "yaw": -90.0},
+	{"model": ["restaurant", "pot_A"], "pos": Vector3(6.9, 0.0, -12.4), "yaw": 0.0},
+
+	# ---- bedroom (west, back)
+	{"model": ["furniture", "pictureframe_large_B"], "pos": Vector3(-8.0 + 0.16, 1.6, -16.8), "yaw": 90.0, "ground": false},
+	{"model": ["furniture", "lamp_table"], "pos": Vector3(-7.15, 0.55, -16.2), "yaw": 0.0, "ground": false},
+
+	# ---- study (east, back)
+	{"model": ["furniture", "pictureframe_small_A"], "pos": Vector3(8.0 - 0.16, 1.7, -16.2), "yaw": -90.0, "ground": false},
+	{"model": ["furniture", "book_set"], "pos": Vector3(0.9, 1.35, -18.0), "yaw": -7.0, "ground": false},
+	{"model": ["furniture", "cactus_small_A"], "pos": Vector3(7.2, 0.0, -18.4), "yaw": 0.0},
+]
+
+
 static func _solids() -> Array[Rect2]:
 	var out: Array[Rect2] = []
 	out.append_array(WALLS)
