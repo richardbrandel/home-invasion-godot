@@ -536,22 +536,33 @@ func attach_kit() -> void:
 		var src := mi.get_active_material(0)
 		if src is StandardMaterial3D and mi.material_override == null:
 			var dup := (src as StandardMaterial3D).duplicate() as StandardMaterial3D
-			dup.albedo_color = dup.albedo_color * Color(0.24, 0.25, 0.30)
+			# 0.24 was so dark that every tonal boundary in the character's own texture
+			# vanished and he rendered as a flat silhouette. Richard: "the thief is all
+			# black, we need some detail." This MULTIPLIES the existing texture rather than
+			# replacing it, so the detail was always there to recover — it just needed
+			# lifting above the point where the tonemapper crushes it to black.
+			dup.albedo_color = dup.albedo_color * Color(0.34, 0.35, 0.41)
 			mi.material_override = dup
 
-	var dark := StandardMaterial3D.new()
-	dark.albedo_color = Color(0.045, 0.048, 0.060)
-	dark.roughness = 0.88
+	# Kit pieces are deliberately DIFFERENT tones from each other and from the body. A single
+	# near-black for all of them is what made him read as one shape.
+	var hat := StandardMaterial3D.new()
+	hat.albedo_color = Color(0.150, 0.152, 0.175)
+	hat.roughness = 0.94
+	var glove := StandardMaterial3D.new()
+	glove.albedo_color = Color(0.070, 0.071, 0.082)
+	glove.roughness = 0.80
 	var cloth := StandardMaterial3D.new()
-	cloth.albedo_color = Color(0.085, 0.092, 0.115)
-	cloth.roughness = 0.96
+	# a worn olive canvas, so the bag is legible against him and against the world
+	cloth.albedo_color = Color(0.215, 0.205, 0.155)
+	cloth.roughness = 0.97
 
-	_beanie = _part(kit_root, _cyl(0.098, 0.082, 0.105), Vector3.ZERO, dark)
+	_beanie = _part(kit_root, _cyl(0.098, 0.082, 0.105), Vector3.ZERO, hat)
 	_beanie.name = "Beanie"
 	_bag = _part(kit_root, _box(0.28, 0.32, 0.13), Vector3.ZERO, cloth)
 	_bag.name = "Holdall"
 	for i in 2:
-		var g := _part(kit_root, _box(0.082, 0.098, 0.150), Vector3.ZERO, dark)
+		var g := _part(kit_root, _box(0.082, 0.098, 0.150), Vector3.ZERO, glove)
 		g.name = "Glove%d" % i
 		_gloves.append(g)
 

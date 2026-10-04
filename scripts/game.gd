@@ -397,14 +397,19 @@ func _setup_environment() -> void:
 	# --- warm interior practicals. These do the real work: strong, local, with
 	#     real falloff, so the rooms read as pools of light in a dark house.
 	var warm := Color(1.0, 0.78, 0.50)
+	# Heights are just under the CEILING FITTINGS, which House places at WALL_TARGET_H.
+	# These used to sit at 2.0 and 1.9 because that WAS the ceiling; raising it to 3.0 left
+	# every practical hanging in mid-air nine-tenths of a metre below its own light fitting,
+	# with the light visibly coming from nowhere.
 	var practicals := [
-		[Vector3(-5.4, 2.0, -11.0), 9.0, 9.0],   # living room
-		[Vector3(-6.9, 1.5, -9.7),  5.0, 4.5],   # the floor lamp
-		[Vector3( 5.8, 2.0, -11.0), 8.0, 9.0],   # kitchen
-		[Vector3( 0.0, 2.0, -11.0), 6.0, 7.0],   # front hall
-		[Vector3( 0.0, 2.0, -14.4), 5.0, 5.0],   # the interior opening
-		[Vector3(-5.5, 1.9, -17.0), 6.0, 8.0],   # bedroom
-		[Vector3( 5.5, 1.9, -17.0), 6.0, 8.0],   # study
+		[Vector3(-5.4, 2.80, -11.0), 10.0, 9.5],  # living room
+		[Vector3(-6.9, 1.55, -9.7),   3.0, 3.4],  # the floor lamp: tightly wound so it lights
+		                                          # its corner instead of blasting the wall
+		[Vector3( 5.8, 2.80, -11.0),  9.0, 9.5],  # kitchen
+		[Vector3( 0.0, 2.80, -11.0),  7.0, 7.5],  # front hall
+		[Vector3( 0.0, 2.80, -14.4),  6.0, 5.5],  # the interior opening
+		[Vector3(-5.5, 2.70, -17.0),  7.0, 8.5],  # bedroom
+		[Vector3( 5.5, 2.70, -17.0),  7.0, 8.5],  # study
 	]
 	for spec in practicals:
 		var l := OmniLight3D.new()
@@ -419,7 +424,7 @@ func _setup_environment() -> void:
 
 	# a cold spill on the driveway so the van area is not pitch black
 	var porch := OmniLight3D.new()
-	porch.position = Vector3(0, 2.2, -7.0)
+	porch.position = Vector3(0, 3.0, -7.0)
 	porch.light_color = Color(0.75, 0.82, 1.0)
 	porch.light_energy = 3.5
 	porch.omni_range = 8.0
