@@ -1408,10 +1408,15 @@ func _build_hud() -> void:
 	_overlay.visible = false
 	layer.add_child(_overlay)
 
-	_ov_title = _mk_label(layer, Vector2(0, 360), 54, Color(1, 1, 1))
+	# BOTH LABELS ARE CHILDREN OF THE OVERLAY. They used to be added to `layer` alongside it,
+	# so hiding the overlay hid only the dark backdrop and left the big "FAILURE" /
+	# "HOME DEFENDED" text burned onto the screen for the rest of the session — including
+	# into the next round, which is exactly what Richard reported. `_overlay` sits at (0,0)
+	# and is 1600x900 like `layer`, so these offsets are unchanged.
+	_ov_title = _mk_label(_overlay, Vector2(0, 360), 54, Color(1, 1, 1))
 	_ov_title.size = Vector2(1600, 70)
 	_ov_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_ov_sub = _mk_label(layer, Vector2(0, 440), 17, Color(0.82, 0.85, 0.88))
+	_ov_sub = _mk_label(_overlay, Vector2(0, 440), 17, Color(0.82, 0.85, 0.88))
 	_ov_sub.size = Vector2(1600, 30)
 	_ov_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_make_hud_click_through(layer)
