@@ -114,9 +114,17 @@ var _shot_hide_player := false
 ## mouse motion, and a screenshot has no mouse, so without this the cone state cannot be
 ## photographed at all.
 var _shot_aim := 0.0
+## Force the intruder to be carrying a named item, so the hand attachment can be
+## photographed on demand instead of hunting for the moment he happens to pick one up.
+## He only grabs three times in a ~99 s round and the window is a few seconds wide.
+var _shot_carry := ""
 
 
 func _ready() -> void:
+	# Process AFTER the scene tree's own nodes. The AnimationPlayer is a descendant and
+	# writes the skeleton pose during its process step, so anything that overrides a bone
+	# — Actor.grip() — would be overwritten every frame at the default priority.
+	process_priority = 100
 	_setup_environment()
 	House.build_all(self)
 	_build_collision()
@@ -163,6 +171,8 @@ func _ready() -> void:
 			_shot_hide_player = true
 		if a.begins_with("--shot-aim="):
 			_shot_aim = float(a.substr(11))
+		if a.begins_with("--carry="):
+			_shot_carry = a.substr(8)
 		# force the fallback scheme, so "does reverting still work" is checkable
 		if a == "--aim=fixed":
 			aim_cone = false
@@ -204,6 +214,12 @@ func _setup_environment() -> void:
 	# interior too — which is exactly why the house now needs a ceiling to keep the
 	# direct sun out (see House.build_all).
 	env.ambient_light_energy = 0.55
+	# sky_contribution below 1.0 is what stops the ceilings rendering black. A sky-only
+	# ambient is DIRECTIONAL: an upward-facing floor samples the bright upper hemisphere,
+	# a downward-facing ceiling samples the dark ground half, and the most visible surface
+	# in every interior got almost nothing. Blending in a plain colour lifts it.
+	env.ambient_light_sky_contribution = 0.55
+	env.ambient_light_color = Color(0.62, 0.60, 0.56)
 
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.tonemap_white = 3.0
@@ -369,6 +385,16 @@ func _spawn_actors() -> void:
 ## Every prop is assembled from boxes and cylinders, so there is nothing to import
 ## and no licence to worry about. Each is modelled with its base at y = 0, which is
 ## what lets the same node drop straight onto the floor at either end.
+## Where a carried item's own origin sits relative to his hand, in his facing frame.
+## Each prop is modelled with its base at y = 0, so these hang it off the grip: the
+## laptop sits in the palm, the TV and the safe are carried by their top edge.
+const CARRY_HANG := {
+	"TV": Vector3(0.06, -0.60, 0.05),
+	"Laptop": Vector3(0.02, -0.03, 0.07),
+	"Safe": Vector3(0.05, -0.47, 0.06),
+}
+
+
 func _build_loot() -> void:
 	for l in loot:
 		var prop := _make_prop(String(l["label"]))
@@ -452,14 +478,20 @@ func _update_loot() -> void:
 			prop.position = Vector3(Sim.DROP.x - 0.55 + 0.55 * float(i), 0.0, Sim.DROP.y)
 			prop.rotation.y = 0.6 * float(i)
 		elif l["taken"]:
-			# carried: held in front of him, turned the way he is facing. The base sits
-			# at waist height so a tall prop does not cover his head.
+			# Held in his HAND. This used to hang off the model root, which sits at his
+			# FEET, so the item floated at hip height — the laptop visibly hovering
+			# between his thighs. The hand bone moves with the animation, so taking the
+			# position from it is what makes the object look carried rather than glued
+			# to his middle. Only the position comes from the bone; the orientation is
+			# his facing, because a Mixamo hand bone's own axes are rotated.
 			var ok := thief_actor != null and thief_actor.root != null
 			prop.visible = ok
 			if ok:
-				var r: Transform3D = thief_actor.root.global_transform
-				prop.global_position = r.origin + Vector3(0, 0.50, 0) + r.basis.z * 0.30
-				prop.global_rotation = Vector3(0, thief_actor.root.rotation.y, 0)
+				var b := thief_actor.carry_basis()
+				var hang: Vector3 = CARRY_HANG.get(String(l["label"]),
+					Vector3(0.0, -0.30, 0.06))
+				prop.global_transform = Transform3D(b,
+					thief_actor.hand_origin() + b * hang)
 		else:
 			prop.visible = true
 			prop.position = Vector3((l["pos"] as Vector2).x, 0.0, (l["pos"] as Vector2).y)
@@ -619,6 +651,11 @@ func _process(delta: float) -> void:
 		# actually see him. update_weapon points it along the aim from the hand bone.
 		player_actor.update_weapon(_aim_dir())
 	_update_crosshair()
+	# Close the hand on whatever he is carrying. Deliberately last, and only possible
+	# because of process_priority in _ready: the AnimationPlayer rewrites the pose during
+	# its own step, so a grip applied any earlier is gone before the frame is drawn.
+	if thief_actor != null and thief_actor.root != null:
+		thief_actor.grip(1.15 if thief.get("carry", "") != "" else 0.0)
 	_update_tracers(delta)
 	_draw_minimap()
 
@@ -645,6 +682,11 @@ func _process(delta: float) -> void:
 			yaw = deg_to_rad(_shot_yaw)
 		if _shot_pitch != INF:
 			pitch = deg_to_rad(_shot_pitch)
+		if _shot_carry != "":
+			thief["carry"] = _shot_carry
+			for l in loot:
+				l["taken"] = String(l["label"]) == _shot_carry
+				l["delivered"] = false
 		if _shot_pos.x != INF:
 			player["pos"] = _shot_pos
 		if _shot_aim != 0.0:
@@ -1091,8 +1133,13 @@ func _refresh_hud() -> void:
 		stance = "CROUCHING"
 	elif player["sprinting"]:
 		stance = "SPRINTING"
-	_lbl_stance.text = "%s    thief: %s" % [stance,
-		("%d hp" % int(maxf(0.0, thief["hp"]))) if thief["alive"] else "down"]
+	# No hit points on screen. It printed the intruder's exact health, through walls, which
+	# is information the player has not earned; the whole point of the minimap's fog of war
+	# is that he has to be found. This reports what the homeowner can actually tell.
+	_lbl_stance.text = "%s    intruder: %s" % [stance,
+		("down" if not thief["alive"]
+			else ("hurting" if thief["hp"] <= 40.0
+				else ("hit" if thief["hp"] < 100.0 else "unhurt")))]
 	_lbl_loot.text = "LOOT STOLEN  %d / 3" % (3 - Sim.remaining(loot))
 
 
@@ -1106,7 +1153,9 @@ func _show_overlay(win: bool) -> void:
 	_ov_title.text = "HOME DEFENDED" if win else "FAILURE"
 	_ov_title.add_theme_color_override("font_color",
 		Color(0.13, 0.77, 0.37) if win else Color(0.94, 0.27, 0.27))
-	_ov_sub.text = ("Thief neutralised — %d/3 valuables still in the house.  [ENTER] to play again"
+	# no longer "the van drove off": the van is scenery and never moves, so the text was
+	# contradicting the screen. See ROADMAP item 22 for making it actually leave.
+	_ov_sub.text = ("Intruder neutralised — %d/3 valuables still in the house.  [ENTER] to play again"
 		% Sim.remaining(loot)) if win \
-		else ("The van drove off with everything.  [ENTER] to play again" if player["alive"]
+		else ("He got everything into the van.  [ENTER] to play again" if player["alive"]
 			else "You were killed defending the house.  [ENTER] to play again")

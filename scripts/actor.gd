@@ -53,6 +53,7 @@ var _current := ""
 var _one_shot := ""
 var _one_shot_t := 0.0
 var _clip_mps := {}
+var _finger_bones: Array[int] = []
 
 
 static func _first_anim_player(node: Node) -> AnimationPlayer:
@@ -344,39 +345,97 @@ func attach_weapon() -> void:
 
 	var metal := StandardMaterial3D.new()
 	metal.albedo_color = Color(0.10, 0.11, 0.13)
-	metal.roughness = 0.42
-	metal.metallic = 0.75
+	metal.roughness = 0.38
+	metal.metallic = 0.80
+
+	var poly := StandardMaterial3D.new()
+	poly.albedo_color = Color(0.07, 0.07, 0.08)
+	poly.roughness = 0.72
+	poly.metallic = 0.05
+
+	var steel := StandardMaterial3D.new()
+	steel.albedo_color = Color(0.26, 0.27, 0.29)
+	steel.roughness = 0.34
+	steel.metallic = 0.90
 
 	# Both props point along local +Z, which is the axis update_weapon aligns.
+	# Built from primitives but with the parts that make a gun legible at a glance:
+	# a slide with sights and serrations, a frame, an angled grip, a trigger and
+	# guard, a magazine base, and a barrel that actually protrudes.
 	_pistol = Node3D.new()
-	var slide := MeshInstance3D.new()
-	var sb := BoxMesh.new(); sb.size = Vector3(0.075, 0.10, 0.34)
-	slide.mesh = sb; slide.position = Vector3(0, 0.02, 0.15)
-	_pistol.add_child(slide)
-	var grip := MeshInstance3D.new()
-	var gb := BoxMesh.new(); gb.size = Vector3(0.070, 0.17, 0.085)
-	grip.mesh = gb; grip.position = Vector3(0, -0.10, 0.0)
+	_part(_pistol, _box(0.032, 0.046, 0.190), Vector3(0, 0.0, 0.060), metal)      # slide
+	_part(_pistol, _box(0.028, 0.026, 0.150), Vector3(0, -0.036, 0.045), poly)    # frame
+	_part(_pistol, _box(0.006, 0.009, 0.006), Vector3(0, 0.028, 0.140), metal)    # front sight
+	_part(_pistol, _box(0.022, 0.009, 0.007), Vector3(0, 0.028, -0.020), metal)   # rear sight
+	for i in 4:                                                                    # slide serrations
+		_part(_pistol, _box(0.033, 0.030, 0.004), Vector3(0, 0.0, -0.010 - 0.012 * i), steel)
+	_part(_pistol, _box(0.022, 0.020, 0.006), Vector3(0.016, 0.004, 0.030), poly) # ejection port
+	var barrel := _cyl(0.0085, 0.0085, 0.075)
+	_part(_pistol, barrel, Vector3(0, 0.004, 0.185), steel, Vector3(PI * 0.5, 0, 0))
+	# grip raked back the way a real one is, then the magazine base under it
+	var grip := Node3D.new()
+	grip.position = Vector3(0, -0.030, 0.010)
+	grip.rotation.x = deg_to_rad(-16.0)
 	_pistol.add_child(grip)
+	_part(grip, _box(0.030, 0.115, 0.048), Vector3(0, -0.052, 0), poly)
+	_part(grip, _box(0.032, 0.010, 0.050), Vector3(0, -0.108, 0), steel)
+	# trigger guard as a real loop, with the trigger inside it
+	var guard := TorusMesh.new()
+	guard.inner_radius = 0.016
+	guard.outer_radius = 0.021
+	_part(_pistol, guard, Vector3(0, -0.050, 0.038), poly, Vector3(0, PI * 0.5, 0))
+	_part(_pistol, _box(0.005, 0.020, 0.006), Vector3(0, -0.048, 0.036), steel)
 
 	_shotgun = Node3D.new()
-	var barrel := MeshInstance3D.new()
-	var rb := CylinderMesh.new(); rb.top_radius = 0.035; rb.bottom_radius = 0.035; rb.height = 0.85
-	barrel.mesh = rb
-	# CylinderMesh runs along +Y; tip it so it runs along +Z like the pistol
-	barrel.rotation.x = PI * 0.5
-	barrel.position = Vector3(0, 0.02, 0.30)
-	_shotgun.add_child(barrel)
-	var stock := MeshInstance3D.new()
-	var tb := BoxMesh.new(); tb.size = Vector3(0.085, 0.12, 0.36)
-	stock.mesh = tb; stock.position = Vector3(0, -0.02, -0.10)
-	_shotgun.add_child(stock)
+	_part(_shotgun, _box(0.042, 0.058, 0.150), Vector3(0, 0.006, 0.010), metal)   # receiver
+	_part(_shotgun, _box(0.020, 0.020, 0.008), Vector3(0.024, 0.012, 0.030), poly)  # port
+	var sbarrel := _cyl(0.0115, 0.0115, 0.470)
+	_part(_shotgun, sbarrel, Vector3(0, 0.020, 0.320), steel, Vector3(PI * 0.5, 0, 0))
+	var tube := _cyl(0.0090, 0.0090, 0.400)
+	_part(_shotgun, tube, Vector3(0, -0.008, 0.290), metal, Vector3(PI * 0.5, 0, 0))
+	_part(_shotgun, _box(0.006, 0.010, 0.006), Vector3(0, 0.034, 0.548), steel)   # bead
+	_part(_shotgun, _box(0.046, 0.042, 0.130), Vector3(0, -0.004, 0.190), poly)   # forend
+	for i in 5:                                                                    # forend ribs
+		_part(_shotgun, _box(0.048, 0.044, 0.004), Vector3(0, -0.004, 0.146 + 0.022 * i), poly)
+	_part(_shotgun, _box(0.040, 0.048, 0.200), Vector3(0, -0.004, -0.155), poly)  # stock
+	_part(_shotgun, _box(0.036, 0.030, 0.060), Vector3(0, 0.018, -0.235), poly)   # comb
+	_part(_shotgun, _box(0.042, 0.052, 0.016), Vector3(0, -0.010, -0.262), steel) # butt pad
+	var sguard := TorusMesh.new()
+	sguard.inner_radius = 0.018
+	sguard.outer_radius = 0.023
+	_part(_shotgun, sguard, Vector3(0, -0.052, 0.000), poly, Vector3(0, PI * 0.5, 0))
+	_part(_shotgun, _box(0.005, 0.022, 0.006), Vector3(0, -0.050, -0.002), steel)
 
 	for part in [_pistol, _shotgun]:
 		_holder.add_child(part)
-		for c in part.get_children():
-			(c as MeshInstance3D).material_override = metal
 		part.visible = false
 	_pistol.visible = true
+
+
+## One primitive of a weapon prop.
+func _part(parent: Node3D, mesh: Mesh, pos: Vector3, mat: Material,
+		rot: Vector3 = Vector3.ZERO) -> void:
+	var m := MeshInstance3D.new()
+	m.mesh = mesh
+	m.position = pos
+	m.rotation = rot
+	m.material_override = mat
+	parent.add_child(m)
+
+
+func _box(w: float, h: float, d: float) -> BoxMesh:
+	var b := BoxMesh.new()
+	b.size = Vector3(w, h, d)
+	return b
+
+
+func _cyl(r: float, top: float, h: float) -> CylinderMesh:
+	var c := CylinderMesh.new()
+	c.bottom_radius = r
+	c.top_radius = top
+	c.height = h
+	c.radial_segments = 12
+	return c
 
 
 ## World position of the muzzle, so a tracer can be drawn out of the gun rather than out
@@ -387,6 +446,56 @@ func muzzle() -> Vector3:
 		return Vector3.ZERO
 	var t := _holder.global_transform
 	return t.origin + t.basis.z * 0.40
+
+
+## Hand bone world position, for placing something the character is HOLDING.
+##
+## Origin only, deliberately. A Mixamo hand bone's own axes are rotated relative to the
+## character — parenting a prop to it is what once pointed the shotgun down between his
+## legs — so callers take the position and supply their own orientation.
+func hand_origin() -> Vector3:
+	if _skeleton == null or _hand_bone < 0:
+		return root.global_position if root != null else Vector3.ZERO
+	return (_skeleton.global_transform * _skeleton.get_bone_global_pose(_hand_bone)).origin
+
+
+## Upright, yaw-only basis for orienting a carried object. Using the character's facing
+## rather than the hand's keeps a carried TV the right way up while it still follows the
+## arm, because only the POSITION is taken from the bone.
+func carry_basis() -> Basis:
+	if root == null:
+		return Basis()
+	return Basis(Vector3.UP, root.rotation.y)
+
+
+## Curl the right hand's fingers so it reads as gripping something.
+##
+## There is no carry or grab animation in the asset set — the clips are idle, walk, run,
+## crouch_idle, crouch_walk, aim, shoot, reload and death — so the hand cannot be posed
+## by playing one. The fingers are real bones, so they are curled directly.
+##
+## This must run AFTER the AnimationPlayer has written the pose for the frame, which is
+## why game.gd calls it at the end of _process and not from tick().
+func grip(amount: float) -> void:
+	if _skeleton == null or amount <= 0.0:
+		return
+	if _finger_bones.is_empty():
+		for i in _skeleton.get_bone_count():
+			var n := String(_skeleton.get_bone_name(i))
+			if n.contains("RightHand") and n != "mixamorig:RightHand" \
+					and not n.ends_with("RightHand"):
+				_finger_bones.append(i)
+	for i in _finger_bones:
+		var n := String(_skeleton.get_bone_name(i))
+		# the thumb folds the other way, and the middle joint of a finger bends most
+		var dir := -1.0 if n.contains("Thumb") else 1.0
+		var seg := 1.0
+		if n.ends_with("2"):
+			seg = 1.30
+		elif n.ends_with("3"):
+			seg = 0.85
+		_skeleton.set_bone_pose_rotation(i,
+			Quaternion(Vector3.RIGHT, amount * seg * dir))
 
 
 ## Called every frame with the direction the player is aiming.

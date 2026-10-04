@@ -25,6 +25,12 @@ const WALL_SRC_D := 0.5
 
 const WALL_TARGET_H := 2.0     # must match Sim.WALL_HEIGHT
 const WALL_TARGET_D := 0.25    # must match Sim.WALL_THICKNESS
+## Where the ceiling lights hang, one per room, matching the practical lights in
+## game.gd's _setup_environment so the fitting sits where the light is coming from.
+const CEILING_FITTINGS := [
+	Vector2(-5.4, -11.0), Vector2(5.4, -11.0), Vector2(0, -11.6),
+	Vector2(-5.5, -17.0), Vector2(5.4, -17.0),
+]
 
 
 static func _exists(path: String) -> bool:
@@ -146,25 +152,76 @@ static func build_floors(parent: Node3D) -> void:
 static var _wall_mat: StandardMaterial3D
 
 
-## A ceiling across the whole footprint.
+## Ceilings.
 ##
-## Without one the daylight key reaches straight into every room. Godot does not
-## occlude light — the walls block only what they physically cover — so switching the
-## scene from dusk to day turned the interior into a roofless diorama with the warm
-## practicals washed out. The underside is all the camera ever sees, so it is plain
-## warm plaster rather than a roof.
+## This used to be one flat slab with no lighting response, and it rendered almost black.
+## Two causes, both fixed: the environment takes its ambient from the sky, and a
+## DOWNWARD-facing surface samples the sky's dark ground hemisphere — so the ceiling's
+## underside received almost nothing while the floor facing it received the bright half
+## (see `_setup_environment`); and there was nothing up there to look at.
+##
+## Now there is a cornice where the ceiling meets the walls and a light fitting in every
+## room, so it reads as a ceiling rather than a lid.
 static func build_ceiling(parent: Node3D) -> void:
 	var house := Sim.HOUSE
-	var c := MeshInstance3D.new()
+	var plaster := _flat(Color(0.86, 0.84, 0.80))
+	# a little self-illumination, standing in for the bounce a real room has
+	plaster.emission_enabled = true
+	plaster.emission = Color(0.86, 0.84, 0.80) * 0.26
+
+	var slab := MeshInstance3D.new()
 	var box := BoxMesh.new()
 	box.size = Vector3(house.size.x, 0.22, house.size.y)
-	c.mesh = box
-	c.position = Vector3(house.position.x + house.size.x * 0.5,
+	slab.mesh = box
+	slab.position = Vector3(house.position.x + house.size.x * 0.5,
 		WALL_TARGET_H + 0.11,
 		house.position.y + house.size.y * 0.5)
-	c.material_override = _flat(Color(0.80, 0.78, 0.74))
-	c.name = "Ceiling"
-	parent.add_child(c)
+	slab.material_override = plaster
+	slab.name = "Ceiling"
+	parent.add_child(slab)
+
+	var trim := _flat(Color(0.93, 0.91, 0.87))
+	var cw := 0.09
+	var inner := Rect2(house.position.x + Sim.WALL_THICKNESS,
+		house.position.y + Sim.WALL_THICKNESS,
+		house.size.x - Sim.WALL_THICKNESS * 2.0,
+		house.size.y - Sim.WALL_THICKNESS * 2.0)
+	for run in [
+		Rect2(inner.position.x, inner.position.y, inner.size.x, cw),
+		Rect2(inner.position.x, inner.end.y - cw, inner.size.x, cw),
+		Rect2(inner.position.x, inner.position.y, cw, inner.size.y),
+		Rect2(inner.end.x - cw, inner.position.y, cw, inner.size.y),
+	]:
+		var m := MeshInstance3D.new()
+		var b := BoxMesh.new()
+		b.size = Vector3(run.size.x, 0.09, run.size.y)
+		m.mesh = b
+		m.position = Vector3(run.position.x + run.size.x * 0.5, WALL_TARGET_H - 0.045,
+			run.position.y + run.size.y * 0.5)
+		m.material_override = trim
+		parent.add_child(m)
+
+	for spot in CEILING_FITTINGS:
+		var rose := MeshInstance3D.new()
+		var rb := CylinderMesh.new()
+		rb.top_radius = 0.09
+		rb.bottom_radius = 0.09
+		rb.height = 0.04
+		rose.mesh = rb
+		rose.position = Vector3(spot.x, WALL_TARGET_H - 0.02, spot.y)
+		rose.material_override = trim
+		parent.add_child(rose)
+
+		var shade := MeshInstance3D.new()
+		var sb := CylinderMesh.new()
+		sb.top_radius = 0.05
+		sb.bottom_radius = 0.17
+		sb.height = 0.13
+		sb.radial_segments = 16
+		shade.mesh = sb
+		shade.position = Vector3(spot.x, WALL_TARGET_H - 0.11, spot.y)
+		shade.material_override = _flat(Color(0.96, 0.94, 0.88))
+		parent.add_child(shade)
 
 
 static func use_clean_wall_texture(inst: Node3D) -> void:
@@ -180,8 +237,7 @@ static func use_clean_wall_texture(inst: Node3D) -> void:
 	for c in inst.find_children("*", "MeshInstance3D", true, false):
 		(c as MeshInstance3D).material_override = _wall_mat
 
-static func build_wall_run(parent: Node3D, run: Rect2,
-		open_bays := {}, door_bays := {}) -> void:
+static func build_wall_run(parent: Node3D, run: Rect2, open_bays := {}) -> void:
 	var horizontal := run.size.x >= run.size.y
 	var length: float = run.size.x if horizontal else run.size.y
 	var bays := maxi(1, int(round(length / (WALL_SRC_W * SCALE))))
@@ -191,11 +247,11 @@ static func build_wall_run(parent: Node3D, run: Rect2,
 	var sz := WALL_TARGET_D / WALL_SRC_D
 
 	for i in bays:
-		var model := "wall"
-		if door_bays.has(i):
-			model = "wall_doorway"
-		elif open_bays.has(i):
-			model = "wall_window_open"
+		# There is no doorway model in play here. The front door is a GAP between two
+		# separate wall runs (Sim.DOOR_GAP), not a bay inside one, so a `wall_doorway`
+		# branch here could never be reached — it was dead code until 2026-10-04. An
+		# actual door is ROADMAP item 17.
+		var model := "wall_window_open" if open_bays.has(i) else "wall"
 
 		var t := (float(i) + 0.5) * step
 		var x: float
@@ -209,8 +265,11 @@ static func build_wall_run(parent: Node3D, run: Rect2,
 			x = run.position.x + run.size.x * 0.5
 			z = run.position.y + t
 			rot = PI * 0.5
-		# a wall panel is wide in local X, so swap the scale on a Z run
-		var sc := Vector3(sx, sy, sz) if horizontal else Vector3(sx, sy, sz)
+		# No orientation swap here, and that is deliberate: Godot applies `scale` in the
+		# node's LOCAL space. A wall panel is wide in local X and thin in local Z whatever
+		# its rotation, so sx always scales the run length and sz always the thickness. A
+		# branch that swapped them on a Z run would build the side walls 2 m thick.
+		var sc := Vector3(sx, sy, sz)
 		use_clean_wall_texture(place(parent, "restaurant", model, Vector3(x, 0, z), rot, false, sc))
 
 
@@ -221,13 +280,12 @@ static func build_walls(parent: Node3D) -> void:
 		var run_len: float = w.size.x if horiz else w.size.y
 		var bays := maxi(1, int(round(run_len / (WALL_SRC_W * SCALE))))
 		var opens := {}
-		var doors := {}
 		if run_len > 5.0:
 			# a couple of windows on the long exterior runs
 			opens[0] = true
 			if bays > 2:
 				opens[bays - 1] = true
-		build_wall_run(parent, w, opens, doors)
+		build_wall_run(parent, w, opens)
 
 
 # ------------------------------------------------------------ furniture
