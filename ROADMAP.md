@@ -2,6 +2,23 @@
 
 ## Progress
 
+- **R2 the carry pose — DONE** (2026-10-04). Reported twice. The loot rode his hand bone but
+  at hip height because his arms hang in the walk clip and there is no carry animation in the
+  asset set. `scripts/carry_pose.gd` is a `SkeletonModifier3D` that poses both arms after the
+  AnimationPlayer writes the frame; the load now sits between the hands at chest height.
+  Two things had to be right: the override must be **persistent** or the arm creeps instead of
+  taking the pose, and the aim direction was **swept** (`test/probe_carrypose.gd` prints where
+  the hands land) rather than guessed. `CARRY_HANG` re-tuned to match.
+  **Better still if the token is refreshed** — a real Mixamo clip beats a hand-built pose.
+
+- **The carry pose is REACHABLE — the route is now known** (2026-10-04). `test/probe_pose.gd`
+  measured it: on the right shoulder with the walk clip playing, two frames of animation move
+  the hand 0.023 m, a `set_bone_pose_rotation` write moves it 0.039 m, and a
+  `set_bone_global_pose_override` moves it **0.562 m — 25x the control**. So an arm can be
+  aimed by hand, and `Actor.grip()`'s local writes are why the finger grip never worked.
+  Implementing it needs a `SkeletonModifier3D` plus tuning passes; the clip is still better
+  and still behind the token.
+
 - **The van drives — DONE** (2026-10-04). Audit item 22, and the last place the world lied
   about itself. It arrives from the street while the intruder waits at the threshold — the
   dwell and the approach are the same two seconds — and leaves when he does, on both loss
