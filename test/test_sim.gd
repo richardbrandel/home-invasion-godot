@@ -354,6 +354,39 @@ func _init() -> void:
 			saw_escape = true
 	check("and announces it so the round can end", saw_escape, "escaped event raised")
 
+	# ---- he has to get up to speed, and has to slow down again
+	_banner("momentum")
+	player = Sim.create_player()
+	thief = Sim.create_thief()
+	loot = Sim.create_loot()
+	thief["pos"] = Vector2(0.0, 2.0)
+	thief["prev"] = thief["pos"]
+	# past the threshold hesitation, or he simply stands there for the first two seconds
+	thief["think"] = 0.0
+	events = []
+	var speeds: Array = []
+	for n in 30:
+		Sim.step_thief(thief, player, loot, events, dt)
+		speeds.append(float(thief["speed"]))
+	check("he starts from a standstill rather than at full pace",
+		float(speeds[0]) < 0.2, "first frame speed %.3f m/s" % float(speeds[0]))
+	check("and builds speed instead of snapping to it",
+		float(speeds[9]) > float(speeds[0]) and float(speeds[9]) < Sim.THIEF_SPEED,
+		"%.3f -> %.3f m/s over 10 frames (full pace %.2f)"
+			% [speeds[0], speeds[9], Sim.THIEF_SPEED])
+	# now take his route away and watch him coast to a halt
+	var peak := float(thief["speed"])
+	thief["route"] = []
+	events = []
+	var halted := -1
+	for n in 60:
+		Sim.step_thief(thief, player, loot, events, dt)
+		if float(thief["speed"]) <= 0.0:
+			halted = n
+			break
+	check("and coasts to a halt rather than stopping dead", halted > 0,
+		"halted after %d frames from %.2f m/s" % [halted, peak])
+
 	# ---- thief stays in bounds
 	player = Sim.create_player()
 	thief = Sim.create_thief()

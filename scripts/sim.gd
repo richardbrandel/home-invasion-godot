@@ -110,6 +110,17 @@ static var NODES: Dictionary = {
 const PLAYER_SPEED := 4.2
 const PLAYER_SPRINT_SPEED := 6.6
 const PLAYER_CROUCH_SPEED := 2.0
+## A person does not reach walking speed on the first frame or stop dead on arrival. That
+## instant snap was on BOTH characters and is the classic "sliding prop" tell — the audit
+## called it the cheapest large win left in the file, and it was. Deceleration exceeds
+## acceleration, as it does in a person.
+const PLAYER_ACCEL := 20.0
+const PLAYER_DECEL := 30.0
+## The intruder comes up to speed more slowly and carries more momentum when he stops.
+## Deliberately gentle enough not to disturb the stuck detector: at 4 m/s^2 he passes the
+## detector's 25%-of-step bar about 0.08 s after starting, far inside its 1.2 s window.
+const THIEF_ACCEL := 4.0
+const THIEF_DECEL := 6.0
 const PLAYER_RADIUS := 0.42
 const EYE_HEIGHT := 1.62
 const CROUCH_EYE_HEIGHT := 1.05
@@ -450,7 +461,7 @@ static func create_player() -> Dictionary:
 	return {
 		"pos": Vector2(0, -10.6), "yaw": 0.0, "pitch": 0.24,
 		"hp": 100.0, "alive": true, "weapon": "pistol",
-		"crouching": false, "sprinting": false,
+		"crouching": false, "sprinting": false, "vel": Vector2.ZERO,
 		"mag": 12, "cd": 0.0, "reloading": 0.0,
 	}
 
@@ -461,7 +472,7 @@ static func create_thief() -> Dictionary:
 		"mag": THIEF_MAG, "cd": 1.2, "reloading": 0.0, "think": 2.0,
 		"carry": "", "target": "", "route": [], "mode": "hunt",
 		"stuck_t": 0.0, "aim": 0.0, "stagger": 0.0, "hits": 0,
-		"fear": 0.0, "escaped": false, "last_seen": Vector2.ZERO,
+		"fear": 0.0, "escaped": false, "last_seen": Vector2.ZERO, "speed": 0.0,
 	}
 
 static func create_loot() -> Array[Dictionary]:
@@ -572,6 +583,7 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 	var route: Array = thief["route"]
 	var speed_scale: float = thief.get("speed_scale", 1.0)
 	thief["step"] = 0.0
+	var walked := false
 	# A hit stops him where he stands. He is not being teleported or paused for the camera:
 	# a person who has just been shot breaks stride, and that interruption is the whole
 	# reason a firefight reads as a firefight rather than two men standing still trading
@@ -599,11 +611,23 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 		thief["yaw"] = wrapf(float(thief["yaw"])
 			+ clampf(diff, -THIEF_TURN_RATE * dt, THIEF_TURN_RATE * dt), -PI, PI)
 		var align := clampf(1.0 - absf(diff) / PI, 0.55, 1.0)
-		thief["step"] = THIEF_SPEED * speed_scale * align * dt
+		var wish := THIEF_SPEED * speed_scale * align
+		var cur := float(thief["speed"])
+		thief["speed"] = move_toward(cur, wish,
+			(THIEF_ACCEL if wish > cur else THIEF_DECEL) * dt)
+		# `step` is the distance he ACTUALLY covered, which is what the stuck detector
+		# below needs; the intent is `wish`. They were the same thing before he could
+		# accelerate.
+		thief["step"] = float(thief["speed"]) * dt
 		tpos += Vector2(cos(a), sin(a)) * thief["step"]
 		tpos = resolve_circle(tpos, THIEF_RADIUS)
 		tpos = clamp_to_world(tpos, THIEF_RADIUS)
+		walked = true
 		break
+
+	# bleed off momentum only on frames he is NOT walking, so a stop is a stop
+	if not walked:
+		thief["speed"] = move_toward(float(thief["speed"]), 0.0, THIEF_DECEL * dt)
 
 	# ---- solid bodies: neither may stand inside the other. Applied here, once
 	# both have moved — the homeowner's step is taken by the caller before this.

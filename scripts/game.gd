@@ -168,6 +168,10 @@ var _shot_carry := ""
 ## mouse — so anything that only happens when you shoot (impact marks, the muzzle flash,
 ## recoil) cannot be photographed at all.
 var _shot_fire := false
+## Hold a movement key during a capture. Movement could not be photographed at all before
+## this — there is no keyboard in a capture — so anything about how the homeowner walks,
+## accelerates or carries momentum was unverifiable.
+var _shot_walk := false
 
 
 func _ready() -> void:
@@ -227,6 +231,8 @@ func _ready() -> void:
 			_shot_carry = a.substr(8)
 		if a == "--shot-fire":
 			_shot_fire = true
+		if a == "--shot-walk":
+			_shot_walk = true
 		# force the fallback scheme, so "does reverting still work" is checkable
 		if a == "--aim=fixed":
 			aim_cone = false
@@ -682,8 +688,10 @@ func _process(delta: float) -> void:
 
 	if playing:
 		var axis := _move_axis()
+		if _shot_walk:
+			axis = Vector2(0.0, -1.0)   # forward
 		player["crouching"] = Input.is_key_pressed(KEY_C) or Input.is_key_pressed(KEY_CTRL)
-		player["sprinting"] = Input.is_key_pressed(KEY_SHIFT) \
+		player["sprinting"] = (Input.is_key_pressed(KEY_SHIFT) or _shot_walk) \
 			and not player["crouching"] and axis.length() > 0.0
 
 		var speed := Sim.PLAYER_SPEED
@@ -691,9 +699,9 @@ func _process(delta: float) -> void:
 			speed = Sim.PLAYER_CROUCH_SPEED
 		elif player["sprinting"]:
 			speed = Sim.PLAYER_SPRINT_SPEED
+		var wish := Vector2.ZERO
 
 		if axis.length() > 0.0:
-			player_moving = true
 			# camera-relative: forward is the yaw direction in XZ
 			var fwd := Vector2(sin(yaw), cos(yaw))
 			# Camera-RIGHT, computed rather than guessed. Godot's basis is
@@ -701,11 +709,27 @@ func _process(delta: float) -> void:
 			# toward +Z — its right vector is -X, not +X. The old (cos, -sin) was
 			# the mirror of this, which is exactly why A strafed right and D left.
 			var right := Vector2(-cos(yaw), sin(yaw))
-			var dir := (fwd * -axis.y + right * axis.x).normalized()
-			var p: Vector2 = player["pos"] + dir * speed * delta
+			wish = (fwd * -axis.y + right * axis.x).normalized() * speed
+
+		# He carries momentum between frames instead of being assigned a velocity. This is
+		# the whole reason he no longer reads as a sliding prop: previously he was at full
+		# speed on the first frame of a keypress and stationary on the frame after release.
+		var v := player["vel"] as Vector2
+		v = v.move_toward(wish, (Sim.PLAYER_ACCEL if wish != Vector2.ZERO
+			else Sim.PLAYER_DECEL) * delta)
+		if v.length() > 0.02:
+			player_moving = true
+			var p: Vector2 = player["pos"] + v * delta
 			p = Sim.resolve_circle(p, Sim.PLAYER_RADIUS)
 			p = Sim.clamp_to_world(p, Sim.PLAYER_RADIUS)
+			# a wall has to stop him, not let momentum pile up against it
+			var step := p - (player["pos"] as Vector2)
+			if step.length() < v.length() * delta * 0.5:
+				v = step / maxf(delta, 1e-4)
 			player["pos"] = p
+		else:
+			v = Vector2.ZERO
+		player["vel"] = v
 
 		if player["reloading"] > 0.0:
 			player["reloading"] -= delta
@@ -1473,10 +1497,11 @@ func _refresh_hud() -> void:
 		"running" if String(thief["mode"]) == "flee" else (
 			"hurting" if thief["hp"] <= 40.0 else (
 				"hit" if thief["hp"] < 100.0 else "unhurt")))
-	if _shot_fire or _shot_frames != -1:
-		# capture mode only: the raw numbers underneath the state, so AI behaviour can be
-		# read straight out of a screenshot instead of guessed at
+	if _shot_fire or _shot_walk or _shot_frames != -1:
+		# capture mode only: the raw numbers underneath the state, so AI and movement can be
+		# read straight out of a frame instead of guessed at
 		tstate += " [fear %.1f stag %.1f]" % [float(thief["fear"]), float(thief["stagger"])]
+		stance += "  %.2f m/s" % (player["vel"] as Vector2).length()
 	_lbl_stance.text = "%s    intruder: %s" % [stance, tstate]
 	_lbl_loot.text = "LOOT STOLEN  %d / 3" % (3 - Sim.remaining(loot))
 
