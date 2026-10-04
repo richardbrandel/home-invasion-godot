@@ -512,6 +512,13 @@ func _process(delta: float) -> void:
 	_update_actors(delta, playing, player_moving)
 	_update_loot()
 	_update_camera()
+	# Deliberately after the camera moves: the viewmodel follows the camera transform, so
+	# placing it earlier would leave the gun trailing the view by one frame while turning.
+	# set_weapon is re-asserted every frame so dying puts the gun away, and a weapon
+	# switch survives a round reset.
+	if player_actor != null and player_actor.root != null:
+		player_actor.set_weapon(player["weapon"] if player["alive"] else "none")
+		player_actor.update_viewmodel(cam)
 	_update_tracers(delta)
 	_draw_minimap()
 
@@ -615,9 +622,11 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 	player_actor.root.position = Vector3(player["pos"].x,
 		player_actor.ground_offset * (sy / base), player["pos"].y)
 	player_actor.root.rotation.y = yaw
-	player_actor.root.visible = player["alive"]
-	# keep the prop pointing where the bullet actually goes
-	player_actor.update_weapon(_aim_dir())
+	# First person, so the homeowner's own model is never drawn: the camera is inside
+	# his head, and without this you look at the inside of his skull. The weapon is not
+	# a child of this node (see Actor.attach_weapon), which is why hiding it does not
+	# also hide the gun.
+	player_actor.root.visible = false
 
 	# Playback speed comes from how fast the clip itself covered ground before its
 	# root motion was stripped (Actor.clip_mps). Playing a 5.6 m/s sprint clip at
@@ -675,32 +684,23 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 
 
 func _update_camera() -> void:
-	# Position the camera by walking BACK along the aim axis from the shoulder
-	# pivot. Deriving both from one axis is what keeps the crosshair on the
-	# bullet path; an independently computed look_at drifted off it and pitched
-	# the view into the floor.
+	# First person: the camera sits at the homeowner's eye and looks straight down the
+	# aim axis, so the crosshair, the gun and the bullet are all the same line.
 	#
-	# The camera is deliberately kept near eye level: raised above the 2 m walls
-	# it turns the house into a dollhouse and lets the player see the intruder
-	# over walls that the minimap correctly hides.
+	# It used to hang 4.4 m behind on an over-the-shoulder boom. Any mouse movement then
+	# swung the whole room past the character, which reads as the *scene* moving rather
+	# than the player turning, and it left the gun pinned to the screen because the
+	# camera and the aim rotated together — so the mouse could never position the gun.
+	#
+	# It also cures a misfire that was never fixed: _fire() casts from the eye, but
+	# aimed at a point projected from a camera offset 0.72 m to the right and 0.30 m up,
+	# so shots landed roughly 0.6 m left and 0.3 m low of the crosshair at room range.
+	# With the camera on the eye those two points coincide and the error is gone.
 	var eye := Sim.CROUCH_EYE_HEIGHT if player["crouching"] else Sim.EYE_HEIGHT
-	var dist := 4.4      # was 5.6 — the character and weapon read too small
 	var p: Vector2 = player["pos"]
 	var aim := Vector3(sin(yaw) * cos(pitch), -sin(pitch), cos(yaw) * cos(pitch)).normalized()
-	var pivot := Vector3(p.x, eye + 0.30, p.y)
-	var right := Vector3(-cos(yaw), 0.0, sin(yaw))
-	var desired := pivot - aim * dist + right * 0.72
-
-	# pull in when scenery is between the player and the camera
-	var space := get_world_3d().direct_space_state
-	var q := PhysicsRayQueryParameters3D.create(pivot, desired)
-	q.collision_mask = LAYER_WORLD
-	var hit := space.intersect_ray(q)
-	if not hit.is_empty():
-		desired = (hit["position"] as Vector3) + (pivot - desired).normalized() * 0.28
-
-	cam.position = desired
-	cam.look_at(pivot + aim * 20.0, Vector3.UP)
+	cam.position = Vector3(p.x, eye, p.y)
+	cam.look_at(cam.position + aim * 20.0, Vector3.UP)
 
 
 # ------------------------------------------------------------------ combat

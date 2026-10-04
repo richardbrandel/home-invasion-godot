@@ -331,10 +331,16 @@ func attach_weapon() -> void:
 	if _hand_bone < 0:
 		push_warning("Actor: no RightHand bone")
 
-	# a holder under the model root, NOT under the bone
+	# A holder beside the model root, NOT under the bone. Deliberately not a child of
+	# root either: first person hides the model, and in Godot a hidden ancestor hides
+	# every descendant — which would take the weapon with it and leave you holding
+	# nothing. update_weapon() writes a global transform, so the parent is arbitrary.
 	_holder = Node3D.new()
 	_holder.top_level = false
-	root.add_child(_holder)
+	var holder_parent: Node = root.get_parent()
+	if holder_parent == null:
+		holder_parent = root
+	holder_parent.add_child(_holder)
 
 	var metal := StandardMaterial3D.new()
 	metal.albedo_color = Color(0.10, 0.11, 0.13)
@@ -371,6 +377,38 @@ func attach_weapon() -> void:
 			(c as MeshInstance3D).material_override = metal
 		part.visible = false
 	_pistol.visible = true
+
+
+## The first-person weapon is drawn smaller than the one the intruder holds. That is
+## normal for a viewmodel and invisible to the player, but it matters here: at world
+## scale and this distance the pistol still covered the lower right of the frame.
+const VIEWMODEL_SCALE := 0.75
+
+
+## First-person viewmodel placement.
+##
+## In third person the prop rides the animated right hand, which sits about 0.45 m below
+## the eye. With the camera now at the eye that is roughly 56 degrees off axis — far
+## outside a 68 degree frame — so the gun vanished completely. A first-person weapon is
+## normally presented at a fixed offset in front of the camera instead. The basis is
+## built exactly as update_weapon() builds it, so the prop looks identical either way.
+##
+## Must be called AFTER the camera moves, or the gun trails the view by a frame.
+func update_viewmodel(cam: Camera3D) -> void:
+	if _holder == null or cam == null:
+		return
+	var fwd := -cam.global_transform.basis.z
+	var world_up := Vector3.UP
+	if absf(fwd.dot(world_up)) > 0.98:
+		world_up = Vector3.RIGHT
+	var right := fwd.cross(world_up).normalized()
+	var real_up := right.cross(fwd).normalized()
+	# Held low and to the right, and pushed out to 0.58 m. At 0.36 m the grip sat 0.26 m
+	# from the eye and covered a third of the screen.
+	var origin := cam.global_position + right * 0.20 + real_up * -0.15 + fwd * 0.58
+	var b := Basis(right, real_up, fwd).scaled(Vector3(VIEWMODEL_SCALE, VIEWMODEL_SCALE,
+		VIEWMODEL_SCALE))
+	_holder.global_transform = Transform3D(b, origin)
 
 
 ## Called every frame with the direction the player is aiming.
