@@ -812,8 +812,10 @@ func _process(delta: float) -> void:
 				Sim.load_magazine(player)
 		player["cd"] -= delta
 		player["shove_cd"] = maxf(0.0, float(player["shove_cd"]) - delta)
+		player["stagger"] = maxf(0.0, float(player["stagger"]) - delta)
+		# a man with his hands on you is a man you cannot aim through
 		if fire_held and player["cd"] <= 0.0 and player["reloading"] <= 0.0 \
-		and player["mag"] > 0:
+		and player["mag"] > 0 and float(player["stagger"]) <= 0.0:
 			_fire()
 
 		Sim.step_thief(thief, player, loot, events, delta)
@@ -959,6 +961,14 @@ func _drain_events() -> void:
 				_start_van_leave()
 				state = "lose"
 				_show_overlay(false)
+			"thiefShove":
+				# He is on you. This is the one moment the game should feel like a fight
+				# rather than a duel, so it shoves the view as well as the message.
+				msg = "He shoved you off!"
+				msg_t = 1.4
+				pitch = clampf(pitch + 0.10, PITCH_MIN, PITCH_MAX)
+				recoil_recover += 0.06
+				_play_at("impact", Vector3(player["pos"].x, 1.2, player["pos"].y), 0.0)
 			"shoved":
 				# This is the moment the game most needed a sentence: you have just done
 				# something the HUD has never had a word for.

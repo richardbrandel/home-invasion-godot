@@ -588,6 +588,42 @@ func _init() -> void:
 	check("though he does come back for it", back,
 		"carrying '%s' again" % thief["carry"])
 
+	# ---- and he can put his hands on YOU
+	_banner("the intruder's hands")
+	player = Sim.create_player()
+	thief = Sim.create_thief()
+	loot = Sim.create_loot()
+	player["pos"] = Vector2(0.0, -11.0)
+	thief["pos"] = Vector2(0.0, -8.0)          # 3 m away
+	events = []
+	check("at three metres he does not lay a hand on you",
+		not Sim.thief_shove(thief, player, events),
+		"reach is %.1f m" % Sim.THIEF_SHOVE_RANGE)
+
+	thief["pos"] = Vector2(0.0, -9.9)          # 1.1 m
+	var ppos_before: Vector2 = player["pos"]
+	events = []
+	var grabbed: bool = Sim.thief_shove(thief, player, events)
+	var knocked_to: float = (player["pos"] as Vector2).y
+	check("inside reach he does", grabbed, "landed=%s" % grabbed)
+	check("it spoils your aim", float(player["stagger"]) >= Sim.THIEF_SHOVE_STAGGER,
+		"stagger=%.2f s" % player["stagger"])
+	check("and it drives you back", knocked_to < ppos_before.y,
+		"from %.2f m to %.2f m" % [ppos_before.y, knocked_to])
+	events = []
+	check("but not twice in a row", not Sim.thief_shove(thief, player, events),
+		"cooldown is %.1f s" % Sim.THIEF_SHOVE_CD)
+
+	# his hands are full when he is carrying, which is also when he is harmless
+	thief = Sim.create_thief()
+	player = Sim.create_player()
+	player["pos"] = Vector2(0.0, -11.0)
+	thief["pos"] = Vector2(0.0, -9.9)
+	thief["carry"] = "TV"
+	events = []
+	check("a laden intruder has no hands free to grab you",
+		not Sim.thief_shove(thief, player, events), "carrying the %s" % thief["carry"])
+
 	# ---- thief stays in bounds
 	player = Sim.create_player()
 	thief = Sim.create_thief()

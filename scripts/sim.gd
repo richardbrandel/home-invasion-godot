@@ -185,6 +185,14 @@ const SHOVE_STAGGER := 1.2
 const SHOVE_FEAR := 2.0
 const SHOVE_PUSH := 0.45      # metres he is driven back
 const SHOVE_CD := 0.8
+## At arm's length the intruder does not shoot you, he puts his hands on you. He had NO
+## answer at contact range at all — he would stand and fire, which made a man close enough
+## to grab you less dangerous than one across the room, and made walking into him the
+## correct play. He still will not do it while carrying: his hands are full.
+const THIEF_SHOVE_RANGE := 1.5
+const THIEF_SHOVE_CD := 2.6
+const THIEF_SHOVE_STAGGER := 0.9
+const THIEF_SHOVE_PUSH := 0.55
 ## How long he is off balance and cannot pick anything up again. WITHOUT THIS THE SHOVE IS
 ## NEARLY POINTLESS: he is shoved 0.45 m and the grab range is 1.4 m, so he re-took the item
 ## on the very next frame — measured, not guessed. He has to stoop for it.
@@ -507,6 +515,7 @@ static func create_player() -> Dictionary:
 		"hp": THIEF_MAX_HP, "alive": true, "weapon": "pistol",
 		"crouching": false, "sprinting": false, "vel": Vector2.ZERO,
 		"mag": 12, "mags": {"pistol": 12, "shotgun": 6}, "shove_cd": 0.0,
+		"stagger": 0.0,
 		"reserve": RESERVE.duplicate(), "cd": 0.0, "reloading": 0.0,
 	}
 
@@ -577,6 +586,30 @@ static func shove(player: Dictionary, thief: Dictionary, loot: Array, events: Ar
 	return true
 
 
+## The intruder shoves the homeowner. Returns true if it landed.
+##
+## He had no answer at contact range: he would simply stand and fire, so a man close enough
+## to grab you was LESS dangerous than one across the room and walking into him was the
+## correct play. It knocks you back, spoils your aim, and stops you firing for a moment.
+## He will not do it while carrying anything — his hands are full.
+static func thief_shove(thief: Dictionary, player: Dictionary, events: Array) -> bool:
+	if not thief["alive"] or bool(thief.get("escaped", false)):
+		return false
+	if String(thief["carry"]) != "":
+		return false
+	if float(thief.get("shove_cd", 0.0)) > 0.0:
+		return false
+	var to: Vector2 = (player["pos"] as Vector2) - (thief["pos"] as Vector2)
+	if to.length() > THIEF_SHOVE_RANGE or to.length() < 0.001:
+		return false
+	thief["shove_cd"] = THIEF_SHOVE_CD
+	player["stagger"] = maxf(float(player.get("stagger", 0.0)), THIEF_SHOVE_STAGGER)
+	player["pos"] = resolve_circle(
+		(player["pos"] as Vector2) + to.normalized() * THIEF_SHOVE_PUSH, PLAYER_RADIUS)
+	events.append({"type": "thiefShove"})
+	return true
+
+
 static func create_thief() -> Dictionary:
 	return {
 		"pos": DROP + Vector2(0, 0.5), "prev": DROP + Vector2(0, 0.5), "yaw": PI,
@@ -585,7 +618,7 @@ static func create_thief() -> Dictionary:
 		"carry": "", "target": "", "route": [], "mode": "hunt",
 		"stuck_t": 0.0, "aim": 0.0, "stagger": 0.0, "hits": 0,
 		"fear": 0.0, "escaped": false, "last_seen": Vector2.ZERO, "speed": 0.0,
-		"searched": [], "alarm": -1.0, "sirens": false, "regrab": 0.0,
+		"searched": [], "alarm": -1.0, "sirens": false, "regrab": 0.0, "shove_cd": 0.0,
 	}
 
 static func create_loot() -> Array[Dictionary]:
@@ -613,6 +646,7 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 	if thief["reloading"] > 0.0:
 		thief["reloading"] -= dt
 	thief["regrab"] = maxf(0.0, float(thief["regrab"]) - dt)
+	thief["shove_cd"] = maxf(0.0, float(thief["shove_cd"]) - dt)
 	if thief["escaped"]:
 		return false
 
@@ -632,6 +666,10 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 				events.append({"type": "sirens"})
 			# he drops everything and runs, exactly as if he had been shot at
 			thief["fear"] = maxf(float(thief["fear"]), FEAR_FLEE)
+
+	# At arm's length he grabs rather than shoots. Checked before the fear branch, because
+	# a man already close enough to touch you does not first decide whether to run.
+	thief_shove(thief, player, events)
 
 	# ---- decide
 	#
