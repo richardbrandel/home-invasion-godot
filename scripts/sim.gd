@@ -129,6 +129,23 @@ const THIEF_TURN_RATE := 4.5
 ## How much of his pace he keeps while carrying each item. A home safe is a two-person
 ## job in reality and a laptop is one hand; both used to travel at exactly 1.3 m/s.
 const CARRY_SPEED := {"TV": 0.70, "Safe": 0.50, "Laptop": 0.92}
+## Fear, and what it takes to make him abandon the job. It is raised by being shot at and
+## much more by being hit, and decays slowly while nothing is happening. Once he decides to
+## run he does not change his mind — the flee mode is sticky.
+const FEAR_FLEE := 4.0
+const FEAR_DECAY := 0.18
+const FEAR_PER_SHOT := 0.7
+const FEAR_PER_HIT := 2.0
+
+
+## Tell him he is being shot at. Called by the game when the homeowner fires; `loudness`
+## scales with how close and how loud, so a shotgun at 3 m is not the same as a pistol
+## across the house.
+static func alert_thief(thief: Dictionary, from: Vector2, loudness := 1.0) -> void:
+	if not thief["alive"] or bool(thief.get("escaped", false)):
+		return
+	thief["last_seen"] = from
+	thief["fear"] = minf(float(thief.get("fear", 0.0)) + FEAR_PER_SHOT * loudness, 8.0)
 const THIEF_FIRE_HUNTING := 1.35
 const THIEF_MAG := 8
 const THIEF_RELOAD := 1.5
@@ -444,6 +461,7 @@ static func create_thief() -> Dictionary:
 		"mag": THIEF_MAG, "cd": 1.2, "reloading": 0.0, "think": 2.0,
 		"carry": "", "target": "", "route": [], "mode": "hunt",
 		"stuck_t": 0.0, "aim": 0.0, "stagger": 0.0, "hits": 0,
+		"fear": 0.0, "escaped": false, "last_seen": Vector2.ZERO,
 	}
 
 static func create_loot() -> Array[Dictionary]:
@@ -470,12 +488,34 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 	thief["cd"] -= dt
 	if thief["reloading"] > 0.0:
 		thief["reloading"] -= dt
+	if thief["escaped"]:
+		return false
 
 	var tpos: Vector2 = thief["pos"]
 	var ppos: Vector2 = player["pos"]
 
+	# fear settles when nothing is happening. It does not un-decide a decision already
+	# taken, which is why `mode == "flee"` below is sticky.
+	thief["fear"] = maxf(0.0, float(thief["fear"]) - FEAR_DECAY * dt)
+
 	# ---- decide
-	if thief["carry"] != "":
+	#
+	# Fear first. A real intruder leaves at the first sign of an armed occupant — certainly
+	# once someone starts shooting at him — and this model had none at all: he worked calmly
+	# through to the third item while being fired at, which the audit called the highest
+	# realism ceiling left anywhere in it.
+	if thief["mode"] == "flee" or float(thief["fear"]) >= FEAR_FLEE:
+		thief["mode"] = "flee"
+		if (thief["route"] as Array).is_empty():
+			thief["route"] = route_to(nearest_node(tpos), "van")
+		# He is gone once he has finished the route to the van AND is clear of the house.
+		# The threshold is the route emptying rather than a distance, because the "van" node
+		# sits well short of the van model — at z 4.4 against the van's 7.0 — so a distance
+		# test against the van never fires and he stands in the drive forever.
+		if (thief["route"] as Array).is_empty() and tpos.y > HOUSE.end.y + 1.0:
+			thief["escaped"] = true
+			events.append({"type": "escaped", "carried": thief["carry"]})
+	elif thief["carry"] != "":
 		thief["mode"] = "carry"
 		if (thief["route"] as Array).is_empty():
 			thief["route"] = route_to(nearest_node(tpos), "van")
@@ -636,6 +676,8 @@ static func damage_thief(thief: Dictionary, dmg: float, events: Array) -> bool:
 	# his sight picture is gone: he has to re-settle before he can shoot again
 	thief["aim"] = 0.0
 	thief["hits"] = int(thief.get("hits", 0)) + 1
+	# being hit frightens him far more than being missed
+	thief["fear"] = minf(float(thief.get("fear", 0.0)) + FEAR_PER_HIT, 8.0)
 	if thief["hp"] <= 0.0:
 		thief["hp"] = 0.0
 		thief["alive"] = false

@@ -304,6 +304,56 @@ func _init() -> void:
 		(thief["pos"] as Vector2).distance_to(before) < 0.001,
 		"moved %.4f m" % (thief["pos"] as Vector2).distance_to(before))
 
+	# ---- gunfire makes him give up the job
+	_banner("gunfire drives him off")
+	player = Sim.create_player()
+	thief = Sim.create_thief()
+	loot = Sim.create_loot()
+	check("he starts unafraid", float(thief["fear"]) == 0.0, "fear=0")
+	# a couple of shots at room range is not enough
+	for i in 2:
+		Sim.alert_thief(thief, Vector2(0.0, -11.0), 1.0)
+	check("two shots do not drive him off",
+		thief["mode"] != "flee", "fear=%.2f mode=%s" % [thief["fear"], thief["mode"]])
+	# but a sustained burst does
+	for i in 4:
+		Sim.alert_thief(thief, Vector2(0.0, -11.0), 1.0)
+	check("a sustained burst drives him off",
+		float(thief["fear"]) >= Sim.FEAR_FLEE,
+		"fear=%.2f threshold=%.1f" % [thief["fear"], Sim.FEAR_FLEE])
+	# fear settles when nothing is happening
+	thief["fear"] = 1.0
+	thief["mode"] = "hunt"
+	thief["route"] = [Vector2(0.0, -12.0)]
+	thief["think"] = 0.0
+	for i in 60:
+		Sim.step_thief(thief, player, loot, events, dt)
+	check("and fear decays when the shooting stops",
+		float(thief["fear"]) < 1.0, "fear=%.2f" % thief["fear"])
+
+	# ---- and once he breaks off he runs for the van
+	thief = Sim.create_thief()
+	thief["pos"] = Vector2(0.0, -12.0)
+	thief["fear"] = Sim.FEAR_FLEE
+	thief["mode"] = "flee"
+	thief["stagger"] = 0.0
+	events = []
+	var got_away := false
+	var steps := 0
+	for i in 3000:
+		steps = i
+		if thief["escaped"]:
+			got_away = true
+			break
+		Sim.step_thief(thief, player, loot, events, dt)
+	check("a frightened intruder runs for the van and gets away", got_away,
+		"ended at %s after %d steps" % [thief["pos"], steps])
+	var saw_escape := false
+	for ev2 in events:
+		if ev2["type"] == "escaped":
+			saw_escape = true
+	check("and announces it so the round can end", saw_escape, "escaped event raised")
+
 	# ---- thief stays in bounds
 	player = Sim.create_player()
 	thief = Sim.create_thief()

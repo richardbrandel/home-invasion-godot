@@ -118,6 +118,10 @@ var _mark_i := 0
 var _mark_mat: StandardMaterial3D
 var _flash: MeshInstance3D
 var _flash_t := 0.0
+## Set when he breaks off and runs, so the loss text can say how much he got away with
+## rather than claiming he took everything.
+var _ran_off := false
+var _escaped_with := 0
 
 # ------------------------------------------------------------------------ audio
 #
@@ -577,6 +581,8 @@ func reset() -> void:
 	loot = Sim.create_loot()
 	events = []
 	state = "play"
+	_ran_off = false
+	_escaped_with = 0
 	msg = "DEFEND YOUR HOME"
 	msg_t = 2.4
 	yaw = 0.0
@@ -836,6 +842,14 @@ func _drain_events() -> void:
 				msg = "They got the %s!" % ev["label"]
 				msg_t = 2.0
 			"allStolen":
+				_ran_off = false
+				state = "lose"
+				_show_overlay(false)
+			"escaped":
+				# He broke off and ran. A partial loss is a different outcome from losing
+				# everything, and the text has to say which one happened.
+				_ran_off = true
+				_escaped_with = 3 - Sim.remaining(loot)
 				state = "lose"
 				_show_overlay(false)
 			"thiefDown":
@@ -1031,6 +1045,12 @@ func _fire() -> void:
 	pitch = clampf(pitch - kick, PITCH_MIN, PITCH_MAX)
 	recoil_recover += kick * 0.65
 	_play_own("gunshot_" + String(player["weapon"]))
+	# He hears it. A shotgun at room range is not the same event as a pistol across the
+	# house, and this is what gives the firearm a deterrent value beyond its damage.
+	var heard := clampf(1.6 - player["pos"].distance_to(thief["pos"]) / 18.0, 0.15, 1.6)
+	if String(player["weapon"]) == "shotgun":
+		heard *= 1.5
+	Sim.alert_thief(thief, player["pos"], heard)
 
 	# The ray starts at the CAMERA, not the eye. With the camera pulled back behind the
 	# homeowner those are different points, and casting from the eye while the crosshair
@@ -1448,10 +1468,16 @@ func _refresh_hud() -> void:
 	# No hit points on screen. It printed the intruder's exact health, through walls, which
 	# is information the player has not earned; the whole point of the minimap's fog of war
 	# is that he has to be found. This reports what the homeowner can actually tell.
-	_lbl_stance.text = "%s    intruder: %s" % [stance,
-		("down" if not thief["alive"]
-			else ("hurting" if thief["hp"] <= 40.0
-				else ("hit" if thief["hp"] < 100.0 else "unhurt")))]
+	# "running" is fair — a man breaking off and bolting is not subtle.
+	var tstate := "down" if not thief["alive"] else (
+		"running" if String(thief["mode"]) == "flee" else (
+			"hurting" if thief["hp"] <= 40.0 else (
+				"hit" if thief["hp"] < 100.0 else "unhurt")))
+	if _shot_fire or _shot_frames != -1:
+		# capture mode only: the raw numbers underneath the state, so AI behaviour can be
+		# read straight out of a screenshot instead of guessed at
+		tstate += " [fear %.1f stag %.1f]" % [float(thief["fear"]), float(thief["stagger"])]
+	_lbl_stance.text = "%s    intruder: %s" % [stance, tstate]
 	_lbl_loot.text = "LOOT STOLEN  %d / 3" % (3 - Sim.remaining(loot))
 
 
@@ -1467,7 +1493,13 @@ func _show_overlay(win: bool) -> void:
 		Color(0.13, 0.77, 0.37) if win else Color(0.94, 0.27, 0.27))
 	# no longer "the van drove off": the van is scenery and never moves, so the text was
 	# contradicting the screen. See ROADMAP item 22 for making it actually leave.
-	_ov_sub.text = ("Intruder neutralised — %d/3 valuables still in the house.  [ENTER] to play again"
-		% Sim.remaining(loot)) if win \
-		else ("He got everything into the van.  [ENTER] to play again" if player["alive"]
-			else "You were killed defending the house.  [ENTER] to play again")
+	if win:
+		_ov_sub.text = ("Intruder neutralised — %d/3 valuables still in the house."
+			% Sim.remaining(loot)) + "  [ENTER] to play again"
+	elif _ran_off:
+		_ov_sub.text = ("He broke off and ran — %d of 3 with him." % _escaped_with) \
+			+ "  [ENTER] to play again"
+	elif player["alive"]:
+		_ov_sub.text = "He got everything into the van.  [ENTER] to play again"
+	else:
+		_ov_sub.text = "You were killed defending the house.  [ENTER] to play again"
