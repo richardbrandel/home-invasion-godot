@@ -2,6 +2,13 @@
 
 ## Progress
 
+- **Melee, and a defensive verb that is not a gun — DONE** (2026-10-04). [F] shoves: no
+  damage, 1.2 s stagger, fear, 0.45 m of knockback, and he DROPS what he is carrying — the
+  only way to recover a valuable without killing him. Needs 2.5 s to pick it back up, which
+  is what makes it worth doing. Eleven new tests, verified in the game.
+  **Still open from the same item:** the intruder has no equivalent — he will not shove or
+  grapple the homeowner even at contact range.
+
 - **The police clock — DONE** (2026-10-04). A gunshot starts a 110 s countdown; when it runs
   out he hears sirens and leaves with whatever he has. Deliberately not a win — noise cuts a
   robbery short, it does not stop it. Synthesised siren from the street, HUD countdown, six
