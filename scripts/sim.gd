@@ -99,6 +99,36 @@ static var DECOR: Array[Dictionary] = [
 	{"model": ["furniture", "pictureframe_small_A"], "pos": Vector3(8.0 - 0.16, 1.7, -16.2), "yaw": -90.0, "ground": false},
 	{"model": ["furniture", "book_set"], "pos": Vector3(0.9, 1.35, -18.0), "yaw": -7.0, "ground": false},
 	{"model": ["furniture", "cactus_small_A"], "pos": Vector3(7.2, 0.0, -18.4), "yaw": 0.0},
+
+	# ---- a second pass at making the rooms lived in. All floor-standing: an item placed at
+	# an assumed height to sit on furniture is how three props ended up floating in mid-air,
+	# and a floating prop is worse than an empty corner. Everything here is `ground` true.
+
+	# front hall
+	{"model": ["furniture", "rug_oval_A"], "pos": Vector3(0.0, 0.0, -11.6), "yaw": 0.0, "scale": 0.7},
+	{"model": ["furniture", "pictureframe_small_B"], "pos": Vector3(-1.80, 1.62, -12.6), "yaw": 90.0, "ground": false},
+	{"model": ["furniture", "cactus_small_B"], "pos": Vector3(2.1, 0.0, -13.2), "yaw": 12.0},
+
+	# living room
+	{"model": ["furniture", "armchair_pillows"], "pos": Vector3(-4.9, 0.0, -13.3), "yaw": -140.0},
+	{"model": ["furniture", "rug_rectangle_stripes_A"], "pos": Vector3(-5.7, 0.02, -11.9), "yaw": 0.0, "ground": false, "scale": 0.8},
+	{"model": ["furniture", "book_single"], "pos": Vector3(-5.9, 0.0, -12.0), "yaw": 24.0},
+	{"model": ["furniture", "pictureframe_standing_A"], "pos": Vector3(-7.0, 0.0, -14.2), "yaw": 58.0},
+
+	# bedroom
+	{"model": ["furniture", "shelf_B_small"], "pos": Vector3(-3.2, 0.0, -18.5), "yaw": -90.0},
+	{"model": ["furniture", "rug_oval_B"], "pos": Vector3(-6.0, 0.0, -17.4), "yaw": 0.0, "scale": 0.85},
+	{"model": ["furniture", "cactus_small_A"], "pos": Vector3(-3.15, 0.0, -15.6), "yaw": 0.0},
+
+	# study
+	{"model": ["furniture", "shelf_B_large_decorated"], "pos": Vector3(2.9, 0.0, -18.3), "yaw": -90.0},
+	{"model": ["furniture", "chair_C"], "pos": Vector3(6.6, 0.0, -15.4), "yaw": 150.0},
+	{"model": ["furniture", "book_single"], "pos": Vector3(4.6, 0.0, -17.9), "yaw": -40.0},
+
+	# kitchen
+	{"model": ["restaurant", "kitchencabinet"], "pos": Vector3(2.6, 0.0, -8.6), "yaw": 0.0},
+	{"model": ["restaurant", "crate_carrots"], "pos": Vector3(7.4, 0.0, -8.6), "yaw": 20.0},
+	{"model": ["restaurant", "pot_B"], "pos": Vector3(2.2, 0.0, -13.4), "yaw": 0.0},
 ]
 
 

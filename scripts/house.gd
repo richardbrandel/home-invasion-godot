@@ -554,8 +554,9 @@ static func build_skirting(parent: Node3D) -> void:
 static func build_decor(parent: Node3D) -> void:
 	for d in Sim.DECOR:
 		var spec: Array = d["model"]
+		var sc := SCALE * float(d.get("scale", 1.0))
 		var inst := place(parent, spec[0], spec[1], d["pos"], deg_to_rad(float(d.get("yaw", 0.0))),
-			bool(d.get("ground", true)))
+			bool(d.get("ground", true)), Vector3(sc, sc, sc))
 		if inst == null:
 			continue
 		# A picture frame owns no material of its own worth keeping, and several of them are
