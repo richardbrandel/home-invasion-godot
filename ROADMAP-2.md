@@ -146,3 +146,61 @@ that works is a persistent global override, as `scripts/carry_pose.gd` now prove
 **Ceilings: raise to 3.0 m.** Confirmed by Richard, and higher than the 2.4-2.7 m
 I proposed. Note this also relaxes the `CAM_UP` cap described in `AGENTS.md`,
 which was bounded by the 2.0 m wall height.
+
+---
+
+# Status, 2026-10-04 end of session
+
+Twelve commits since v1.4. Latest build `Home Invasion.app` 21:15, **not published** —
+Richard has asked for local test builds only for now. Suite state: **91 sim, 41 actor,
+heist 7/7, wallshot clean.**
+
+## Done
+
+| # | Item | Notes |
+|---|---|---|
+| 1 | Ceilings 3 m | `WALL_TARGET_H` + `Sim.WALL_HEIGHT`. Ceiling went from 54-66% of the frame to a strip. |
+| 4 | Checkerboard floors | TWO of them. `rug_rectangle_A`'s own texture, and KayKit's `floor_kitchen`. New generated `floor_tile.png` for the kitchen. |
+| 6 | Exterior | Fascia + gutter (the overhang was never the problem), plinth, path to the door. |
+| 7 | Interior lighting | Every practical was at the OLD 2 m ceiling, hanging in mid-air. Raised to 2.7-2.8; floor lamp tightened from energy 5.0/range 4.5. |
+| 12 | Animations wired | All seven. Carry pose is now the fallback, not the mechanism. |
+| 23 | Guns | Material CONTRAST (blued slide vs polymer frame vs rubber grip), slide corrected 32x46 -> 25x30 mm, controls added. |
+| 24 | Thief detail | Body multiplier 0.24 -> 0.34. Kit pieces given different tones. |
+| 25 | Front door | Was 55 x 95 CM. Measured the model: 1.60 x 2.80 m at source. Now 0.96 x 2.04, hinged at the edge, own material, lintel above (3 m walls had left a 3 m hole). |
+| 26 | Overlay text | The labels were children of `layer`, not of `_overlay`, so hiding the panel left "FAILURE" burned on screen into the next round. |
+| 27 | Finger grip | LOCAL finger rotation. A global override per joint breaks the chain and stretches the fingers into noodles. |
+| 3 | Skirting | A board around every wall run, footprint + 3 cm so it reads on both faces. |
+| 9/11 | Furnishing | 15 floor-standing decor pieces in `Sim.DECOR`, which is NOT solid. |
+
+## Partly done
+
+- **2** characters are shiny mannequins. The intruder is better; the HOMEOWNER is still a low-poly mesh with a specular blob for hair. The real fix is a clothed mesh.
+- **3** walls still carry the KayKit horizontal seam. Skirting helped; no picture rail or architraves.
+- **5** windows have sills, heads and curtains now. The glazing is still a pale opaque panel from outside.
+- **10** the TV reads better but the valuables are still primitive shapes.
+- **11** some props; not coats, keys, phones, kettles.
+
+## Not started
+
+**8** sockets/switches, **13** animation blending (the `_strip_to_upper_body` hack is the blocker),
+**14** foot IK, **15** idle variation, **16** voice, **17** more non-lethal verbs,
+**18** the 2-D simulation, **19** blood, **20** audio buses, **21** reflections.
+
+## 22 - the minimap, and it is also BACKWARDS
+
+Richard reported on 2026-10-04 that the minimap is mirrored, and asked to leave it for now.
+It ALSO throws `Invalid polygon data, triangulation failed` on about half of all frames.
+
+A fix was attempted and REVERTED: a minimum-separation filter on the polygon points, on the
+theory that `Sim.visibility_polygon`'s `a +/- 1e-4` corner triplets create zero-area slivers.
+It made no difference (141 failures in 300 frames, unchanged). So sliver removal is NOT the
+cause. The next move is to DUMP THE ACTUAL POLYGON on a failing frame and find which edges
+cross, rather than theorising from the generator. A radial fan built from a sorted angle list
+can also contain duplicate angles from shared corners.
+
+## How to resume
+
+Read `AGENTS.md` first — it carries every expensive-to-rediscover invariant. Then this file.
+Then `git log --oneline v1.4..HEAD` for what the twelve commits actually did.
+
+Do NOT trust v1.4 or the published release as a description of the current game.
