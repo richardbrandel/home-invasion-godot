@@ -435,7 +435,11 @@ const WINDOW_HEAD_Y := 2.06
 static func _window_trim(parent: Node3D, at: Vector3, horizontal: bool, bay: float,
 		thickness: float) -> void:
 	var trim := _flat(Color(0.94, 0.93, 0.91))
-	var cloth := _flat(Color(0.32, 0.30, 0.36))
+	# Lighter and narrower than the first cut, which read as a drawn curtain. A panel about a
+	# fifth of the bay, pushed to the edge, is fabric gathered at the side of the window
+	# rather than a curtain pulled across it — and it leaves the middle of the glass doing its
+	# job, which is the thing that stops the facade looking like a film set.
+	var cloth := _flat(Color(0.56, 0.52, 0.53))
 	var w := bay * 0.92
 	var deep := thickness + 0.06
 
@@ -463,10 +467,10 @@ static func _window_trim(parent: Node3D, at: Vector3, horizontal: bool, bay: flo
 	for side in [-1.0, 1.0]:
 		var c := MeshInstance3D.new()
 		var cb := BoxMesh.new()
-		cb.size = Vector3(bay * 0.30, drop, 0.035) if horizontal \
-			else Vector3(0.035, drop, bay * 0.30)
+		cb.size = Vector3(bay * 0.22, drop, 0.032) if horizontal \
+			else Vector3(0.032, drop, bay * 0.22)
 		c.mesh = cb
-		var off: float = float(side) * bay * 0.32
+		var off: float = float(side) * bay * 0.37
 		var p := Vector3(at.x + (off if horizontal else 0.0), WINDOW_SILL_Y + drop * 0.5,
 			at.z + (0.0 if horizontal else off)) + inward
 		c.position = p
