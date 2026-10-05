@@ -278,6 +278,31 @@ static func build_ceiling(parent: Node3D) -> void:
 		m.material_override = roof
 		parent.add_child(m)
 
+	# FASCIA AND GUTTER along each eave edge.
+	#
+	# The overhang was never the problem — 0.45 m is an ordinary eave. What was missing is
+	# the fascia, the trim board along the edge, and without it the roof is just the dark
+	# underside of a box: a heavy lid rather than a roof. A pale board catches the light and
+	# gives the eave a line, and the gutter under it finishes the read.
+	var fascia := _flat(Color(0.90, 0.89, 0.86))
+	var gutter := _flat(Color(0.52, 0.53, 0.55))
+	for s2 in [-1.0, 1.0]:
+		var f := MeshInstance3D.new()
+		var fb := BoxMesh.new()
+		fb.size = Vector3(house.size.x + over * 2.0 + 0.06, 0.15, 0.05)
+		f.mesh = fb
+		f.position = Vector3(mid_x, eave_y - 0.055, mid_z + s2 * half)
+		f.material_override = fascia
+		parent.add_child(f)
+
+		var g := MeshInstance3D.new()
+		var gb := BoxMesh.new()
+		gb.size = Vector3(house.size.x + over * 2.0 + 0.06, 0.075, 0.10)
+		g.mesh = gb
+		g.position = Vector3(mid_x, eave_y - 0.165, mid_z + s2 * (half + 0.035))
+		g.material_override = gutter
+		parent.add_child(g)
+
 	var cap := MeshInstance3D.new()
 	var cb := BoxMesh.new()
 	cb.size = Vector3(house.size.x + over * 2.0 + 0.1, 0.16, 0.34)
@@ -535,6 +560,27 @@ static func build_exterior(parent: Node3D) -> void:
 	head_mat.albedo_color = Color(0.612, 0.582, 0.603)
 	head_mat.roughness = 0.93
 	head.material_override = head_mat
+
+	# PLINTH: the skirt where the wall meets the ground. Without it the wall grows straight
+	# out of the grass, which is one of the things that made it read as a set piece.
+	var plinth := MeshInstance3D.new()
+	var pb := BoxMesh.new()
+	pb.size = Vector3(house.size.x + 0.20, 0.36, house.size.y + 0.20)
+	plinth.mesh = pb
+	plinth.position = Vector3(house.position.x + house.size.x * 0.5, -0.10,
+		house.position.y + house.size.y * 0.5)
+	plinth.material_override = _flat(Color(0.42, 0.41, 0.39))
+	parent.add_child(plinth)
+
+	# PATH from the drive to the front door. The drive stops a metre short of the house, so
+	# the door opened onto bare grass.
+	var path := MeshInstance3D.new()
+	var pab := BoxMesh.new()
+	pab.size = Vector3(1.70, 0.05, 2.60)
+	path.mesh = pab
+	path.position = Vector3(0.0, 0.025, house.end.y + 1.20)
+	path.material_override = _textured("res://assets/textures/driveway.png", 1.2, 2.0)
+	parent.add_child(path)
 
 	# lawn
 	var lawn := MeshInstance3D.new()
