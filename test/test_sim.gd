@@ -712,6 +712,125 @@ func _init() -> void:
 		"%.3f ms per polygon" % ms)
 	print("        %.3f ms per polygon, 200 sampled" % ms)
 
+	_banner("multiple intruders")
+	# The contract for one-or-more bodies. Everything here targets the pairwise
+	# separation, which is the new code path — and the one place a crowd of bodies can
+	# do something the single-intruder version never had to survive.
+	var crew := Sim.create_intruders(3)
+	check("three bodies are built with distinct ids",
+		crew.size() == 3 and crew[0]["id"] == 0 and crew[1]["id"] == 1 and crew[2]["id"] == 2)
+
+	var spawn_ok := true
+	for i in crew.size():
+		for j in range(i + 1, crew.size()):
+			if (crew[i]["pos"] as Vector2).distance_to(crew[j]["pos"]) < Sim.THIEF_RADIUS * 2.0 - 1e-3:
+				spawn_ok = false
+	check("they spawn clear of one another", spawn_ok,
+		"%s %s %s" % [crew[0]["pos"], crew[1]["pos"], crew[2]["pos"]])
+
+	# ---- separation is a contract, not a best effort. Drive three bodies and the
+	# homeowner into each other and nothing may ever overlap or leave the world.
+	var mp := Sim.create_player()
+	var mloot := Sim.create_loot()
+	crew = Sim.create_intruders(3)
+	var worst_gap := INF
+	var oob_bodies := 0
+	var frames := 0
+	for step_i in 900:
+		frames += 1
+		# deliberately walk the player into the cluster, so contact is forced
+		var ang := float(step_i) * 0.11
+		mp["pos"] = Vector2(cos(ang) * 1.2, -11.0 + sin(ang) * 1.2)
+		events = []
+		Sim.step_intruders(crew, mp, mloot, events, dt)
+		for i in crew.size():
+			for j in range(i + 1, crew.size()):
+				worst_gap = minf(worst_gap,
+					(crew[i]["pos"] as Vector2).distance_to(crew[j]["pos"] as Vector2))
+			worst_gap = minf(worst_gap,
+				(crew[i]["pos"] as Vector2).distance_to(mp["pos"] as Vector2))
+			var c: Vector2 = crew[i]["pos"]
+			if c.x < Sim.BOUNDS.position.x - 0.01 or c.x > Sim.BOUNDS.end.x + 0.01 \
+					or c.y < Sim.BOUNDS.position.y - 0.01 or c.y > Sim.BOUNDS.end.y + 0.01:
+				oob_bodies += 1
+	var min_gap: float = Sim.PLAYER_RADIUS + Sim.THIEF_RADIUS
+	check("no two bodies ever overlap, over %d frames of forced contact" % frames,
+		worst_gap >= min_gap - 0.02,
+		"closest approach %.4f m, want >= %.2f" % [worst_gap, min_gap])
+	print("        closest approach over %d frames: %.4f m" % [frames, worst_gap])
+	check("nobody is pushed outside the world bounds", oob_bodies == 0,
+		"%d bodies out of bounds" % oob_bodies)
+
+	# ---- the homeowner is still the body that yields. If the intruder yielded instead a
+	# defender standing still would wall the crew in, which is a bug that already came
+	# back from play once.
+	var solo := Sim.create_intruders(1)
+	var sp := Sim.create_player()
+	# INSIDE the collision distance (0.84 m), or there is nothing to resolve and the test
+	# passes for the wrong reason. The first version of this put them 1.5 m apart — well
+	# clear of each other — and asserted a displacement that should never have happened.
+	sp["pos"] = Vector2(0, Sim.DROP.y + 0.5)
+	solo[0]["pos"] = Vector2(0, Sim.DROP.y + 0.8)
+	var p_before: Vector2 = sp["pos"]
+	events = []
+	Sim.step_intruders(solo, sp, Sim.create_loot(), events, dt)
+	check("a body against the homeowner still yields on the HOMEOWNER",
+		(sp["pos"] as Vector2) != p_before,
+		"player unmoved at %s with an intruder at %s" % [sp["pos"], solo[0]["pos"]])
+
+	# ---- attribution: every per-body event says which body emitted it
+	crew = Sim.create_intruders(3)
+	var ap := Sim.create_player()
+	mloot = Sim.create_loot()
+	for atk in crew:
+		atk["hp"] = 1.0
+	ap["pos"] = Vector2(0, 4.0)
+	for i in crew.size():
+		crew[i]["pos"] = Vector2(-1.5 + float(i) * 1.5, 5.5)
+	var id_ok := true
+	var stray := ""
+	var ids := {}
+	var crew_shots := 0
+	for step_i in 600:
+		events = []
+		Sim.step_intruders(crew, ap, mloot, events, dt)
+		for ev in events:
+			if str(ev["type"]) == "thiefShot":
+				crew_shots += 1
+			if ev.has("id"):
+				ids[ev["id"]] = true
+			elif str(ev["type"]) != "sirens" and str(ev["type"]) != "allStolen":
+				id_ok = false
+				stray = str(ev["type"])
+	check("every per-body event carries the id of the body that emitted it", id_ok,
+		"unattributed event: %s" % stray)
+	check("and the tagged events came from more than one body", ids.size() >= 2,
+		"ids seen: %s" % [ids.keys()])
+	check("shots are among the attributable events", crew_shots > 0,
+		"%d shots over 600 frames" % crew_shots)
+
+	# ---- the separation push must not be banked as travel. Tested directly rather than
+	# by inference: overlapping bodies get pushed apart, and afterwards `prev` must have
+	# moved WITH them, so the stuck detector's `pos - prev` reads zero for a pair that
+	# wanted to stay still. The first version of this measured `prev` drift after a real
+	# 600-frame step and was measuring normal AI locomotion, not the push at all.
+	var quiet := Sim.create_intruders(2)
+	quiet[0]["pos"] = Vector2(0, 5.0)
+	quiet[1]["pos"] = Vector2(0.05, 5.0)
+	var q0_before: Vector2 = quiet[0]["pos"]
+	var q1_before: Vector2 = quiet[1]["pos"]
+	events = []
+	Sim.step_intruders(quiet, Sim.create_player(), Sim.create_loot(), events, 0.0)
+	var pushed_apart: bool = (quiet[0]["pos"] as Vector2).distance_to(quiet[1]["pos"] as Vector2) \
+		>= min_gap - 0.02
+	var not_banked: bool = (quiet[0]["prev"] as Vector2).distance_to(q0_before) <= 1e-6 \
+		and (quiet[1]["prev"] as Vector2).distance_to(q1_before) <= 1e-6
+	check("the push is not banked as travel (prev stays at the frame-start position)",
+		not_banked and pushed_apart,
+		"apart=%s prev_drift=%.4f/%.4f" % [pushed_apart,
+			(quiet[0]["prev"] as Vector2).distance_to(q0_before),
+			(quiet[1]["prev"] as Vector2).distance_to(q1_before)])
+
 	_banner("damage")
 	var th := Sim.create_thief()
 	events = []

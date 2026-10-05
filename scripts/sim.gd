@@ -517,6 +517,62 @@ static func separate_bodies(ppos: Vector2, tpos: Vector2) -> Array[Vector2]:
 	var out: Array[Vector2] = [p, t]
 	return out
 
+## Keep N bodies out of each other. This replaces `separate_bodies` for the
+## multi-intruder case, which is why it takes a LIST of positions rather than a pair.
+##
+## `radii[0]` is the HOMEOWNER and he is the one displaced, exactly as in
+## `separate_bodies` — that choice is load-bearing and is documented there. Everyone
+## else yields to scenery only.
+##
+## Two deliberate deviations from the two-body version:
+##
+## 1. It is iterative (up to PAIR_SWEEPS) rather than a single pass. Resolving the
+##    player against intruder A can push him *into* intruder B, so one pass can leave
+##    a pair overlapping — and the sim's own collision contract is that no two bodies
+##    ever overlap. Three passes is the cap so a cornered cluster cannot hang.
+## 2. The whole group is pushed as a unit if it is shoved out of the world bounds.
+##    `clamp_to_world` per body could otherwise let a cluster walk the HOMEOWNER
+##    through a wall one intruder at a time, which is a net *gain* in displacement
+##    over the two-body case and is not something the old code ever had to survive.
+static func separate_all(positions: Array[Vector2], radii: Array[float]) -> Array[Vector2]:
+	const PAIR_SWEEPS := 3
+	var out := positions.duplicate()
+	var n := out.size()
+	if n < 2:
+		return out
+
+	for _sweep in PAIR_SWEEPS:
+		var moved := false
+		for i in n:
+			for j in range(i + 1, n):
+				var pi: Vector2 = out[i]
+				var pj: Vector2 = out[j]
+				var want := radii[i] + radii[j]
+				var d := pj - pi
+				var dist := d.length()
+				if dist >= want:
+					continue
+				moved = true
+				# coincident bodies have no direction to work with; a fixed axis keeps
+				# the result repeatable instead of depending on float noise
+				var dir := Vector2(1.0, 0.0) if dist < 1e-5 else d / dist
+				var push := want - dist
+				if i == 0:
+					# body 0 is the homeowner: he takes the push, as he does in the
+					# two-body case, and is re-resolved against scenery afterwards
+					out[0] = clamp_to_world(
+						resolve_circle(out[0] - dir * push, radii[0]), radii[0])
+					pj = clamp_to_world(resolve_circle(out[j], radii[j]), radii[j])
+					out[j] = pj
+				else:
+					# two intruders: split it evenly so neither is privileged
+					var half := push * 0.5
+					out[i] = clamp_to_world(resolve_circle(pi - dir * half, radii[i]), radii[i])
+					out[j] = clamp_to_world(resolve_circle(pj + dir * half, radii[j]), radii[j])
+		if not moved:
+			break
+	return out
+
 ## Swing a heading away from the homeowner when he is close and in front. Ties —
 ## walking straight at him — break to a fixed side, so the thief is predictable
 ## instead of jittering left and right.
@@ -689,7 +745,82 @@ static func create_thief() -> Dictionary:
 		"stuck_t": 0.0, "aim": 0.0, "stagger": 0.0, "hits": 0,
 		"fear": 0.0, "escaped": false, "last_seen": Vector2.ZERO, "speed": 0.0,
 		"searched": [], "alarm": -1.0, "sirens": false, "regrab": 0.0, "shove_cd": 0.0,
+		# `id` is the body's identity for event attribution; `step` is the distance he is
+		# trying to cover this frame, which the stuck detector compares against.
+		"id": 0, "step": 0.0,
 	}
+
+## Build `n` intruders, staggered across the driveway so they do not all start inside
+## one another. `create_thief()` spawns a single one at the exact DROP point, which was
+## fine when there could only ever be one; two bodies at the same coordinate are the
+## one case `separate_all` has no direction to resolve, so the spawn has to spread them.
+##
+## The `id` is what lets `game.gd` tell the bodies apart — it is carried on every event
+## the intruder emits, because a sound, a tracer or a death with no source is not
+## playable with three of them in the house.
+static func create_intruders(n: int) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	var count := maxi(n, 1)
+	for i in count:
+		var t := create_thief()
+		t["id"] = i
+		# fan out along the driveway: -1, 0, +1, then wrap for a fourth
+		var lane := float(i) - float(count - 1) * 0.5
+		var off := Vector2(roundf(lane) * (THIEF_RADIUS * 2.2), -absf(lane) * 0.9)
+		t["pos"] = clamp_to_world(DROP + off + Vector2(0, 0.5), THIEF_RADIUS)
+		t["prev"] = t["pos"]
+		out.append(t)
+	return out
+
+## Step every intruder for one frame, then resolve all the bodies against each other.
+##
+## The per-body separation inside `step_thief` is deliberately skipped here: it only
+## knows about the homeowner and one intruder, so running it three times would let each
+## thief shove the player in turn. The pairwise pass at the end is the general version.
+##
+## Returns the indices of the intruders that currently have line of sight to the player.
+static func step_intruders(intruders: Array[Dictionary], player: Dictionary,
+		loot: Array, events: Array, dt: float) -> Array[int]:
+	var seen: Array[int] = []
+	var before: Array[Vector2] = [player["pos"] as Vector2]
+	for t in intruders:
+		before.append(t["pos"] as Vector2)
+
+	# Stamp the source on everything each body emits. With one intruder the game could
+	# assume who fired; with three, an unstamped tracer or gunshot is unattributable, and
+	# a shot you cannot locate is not a playable game. Tagged at the producer because that
+	# is the only place the identity is known — inferring it afterwards from the payload
+	# does not work, since a `grabbed` carries a loot label and not a body.
+	for idx in intruders.size():
+		var t: Dictionary = intruders[idx]
+		var mark := events.size()
+		if step_thief(t, player, loot, events, dt, false):
+			seen.append(idx)
+		for i in range(mark, events.size()):
+			var ev: Dictionary = events[i]
+			var kind := str(ev.get("type", ""))
+			# `sirens` and `allStolen` are deliberately global: the police are not a thief,
+			# and "everything is gone" is not attributable to one of them either.
+			if not ev.has("id") and kind != "sirens" and kind != "allStolen":
+				ev["id"] = int(t.get("id", idx))
+
+	var radii: Array[float] = [PLAYER_RADIUS]
+	for _t in intruders:
+		radii.append(THIEF_RADIUS)
+
+	var after := separate_all(before, radii)
+	player["pos"] = after[0]
+	for idx in intruders.size():
+		var t: Dictionary = intruders[idx]
+		var final: Vector2 = after[idx + 1]
+		# `prev` was set by `step_thief` to where he stood at the start of the frame, and
+		# `before[idx + 1]` is that same position. So the body-push is exactly
+		# `final - before[idx + 1]`, and `prev` is re-anchored on the resolved position.
+		# Measuring travel across the push instead would read a shove as progress and let
+		# the offset accumulate into the next frame, blinding the stuck detector.
+		t["pos"] = final
+		t["prev"] = before[idx + 1]
+	return seen
 
 static func create_loot() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
@@ -708,9 +839,20 @@ static func remaining(loot: Array) -> int:
 # ------------------------------------------------------------------ thief AI
 ## Returns true when the thief currently has line of sight to the player.
 ## `events` accumulates {type=...} dictionaries the caller drains.
-static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, events: Array, dt: float) -> bool:
+## `separate` is false only when called from `step_intruders`, which does the
+## pairwise pass itself — see the note there for why running this one three times
+## would be wrong. Default true keeps every existing caller and test unchanged.
+static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, events: Array,
+		dt: float, separate := true) -> bool:
 	if not thief["alive"]:
 		return false
+
+	# `prev` is where he was at the START of this frame, and it must be captured before
+	# anything moves him. The stuck detector below measures `moved` against it, and
+	# `step_intruders` rewrites it after the group has been pushed apart — so if it were
+	# written late here, the two would disagree and the difference would accumulate into
+	# the travel figure frame after frame.
+	thief["prev"] = thief["pos"]
 
 	thief["cd"] -= dt
 	if thief["reloading"] > 0.0:
@@ -895,11 +1037,13 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 
 	# ---- solid bodies: neither may stand inside the other. Applied here, once
 	# both have moved — the homeowner's step is taken by the caller before this.
-	var pair := separate_bodies(ppos, tpos)
-	ppos = pair[0]
-	tpos = pair[1]
-	player["pos"] = ppos
-	thief["pos"] = tpos
+	# Skipped when the caller resolves the whole group at once (`step_intruders`).
+	if separate:
+		var pair := separate_bodies(ppos, tpos)
+		ppos = pair[0]
+		tpos = pair[1]
+		player["pos"] = ppos
+		thief["pos"] = tpos
 
 	# ---- stuck detection: re-route rather than stand still forever
 	#
@@ -914,7 +1058,14 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 		thief["stuck_t"] += dt
 	else:
 		thief["stuck_t"] = 0.0
-	thief["prev"] = tpos
+	# Only the self-separating path writes this. When `step_intruders` owns the body
+	# resolution it writes `prev` itself, AFTER the group has been pushed apart — a push
+	# from another body is not travel, and recording it as `prev` would make the next
+	# frame's `moved` read as a huge step and blind the stuck detector.
+	# `prev` is NOT written here. It belongs to whoever owns body resolution: this
+	# function when `separate` is true, and `step_intruders` otherwise — which rewrites
+	# it after the group has been pushed apart. Writing it here as well would make the
+	# two disagree, and the difference accumulates into the travel figure every frame.
 
 	if thief["stuck_t"] > 1.2:
 		thief["stuck_t"] = 0.0
