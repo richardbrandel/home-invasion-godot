@@ -401,13 +401,30 @@ func attach_weapon() -> void:
 	steel.roughness = 0.34
 	steel.metallic = 0.90
 
+	# A real pistol reads by CONTRAST between its parts, not by any one of them: a blued
+	# slide and barrel against a matte black polymer frame, with a harder rubber grip below
+	# that. One dark metal for the lot is what made both weapons look like machined blocks
+	# however much geometry was bolted on.
+	var blued := StandardMaterial3D.new()
+	blued.albedo_color = Color(0.055, 0.058, 0.068)
+	blued.roughness = 0.26
+	blued.metallic = 0.92
+	var grip_mat := StandardMaterial3D.new()
+	grip_mat.albedo_color = Color(0.038, 0.038, 0.042)
+	grip_mat.roughness = 0.88
+	grip_mat.metallic = 0.02
+
 	# Both props point along local +Z, which is the axis update_weapon aligns.
 	# Built from primitives but with the parts that make a gun legible at a glance:
 	# a slide with sights and serrations, a frame, an angled grip, a trigger and
 	# guard, a magazine base, and a barrel that actually protrudes.
 	_pistol = Node3D.new()
-	_part(_pistol, _box(0.032, 0.046, 0.190), Vector3(0, 0.0, 0.060), metal)      # slide
-	_part(_pistol, _box(0.028, 0.026, 0.150), Vector3(0, -0.036, 0.045), poly)    # frame
+	_part(_pistol, _box(0.025, 0.030, 0.188), Vector3(0, 0.0, 0.062), blued)      # slide
+	_part(_pistol, _box(0.023, 0.024, 0.150), Vector3(0, -0.028, 0.046), poly)    # frame
+	# the visible controls every service pistol has, on the left where you would see them
+	_part(_pistol, _box(0.004, 0.007, 0.026), Vector3(-0.014, -0.006, 0.020), steel)  # slide stop
+	_part(_pistol, _box(0.004, 0.010, 0.008), Vector3(-0.014, -0.020, 0.010), steel)  # takedown
+	_part(_pistol, _box(0.006, 0.008, 0.006), Vector3(-0.013, -0.040, 0.030), steel)  # mag release
 	_part(_pistol, _box(0.006, 0.009, 0.006), Vector3(0, 0.028, 0.140), metal)    # front sight
 	_part(_pistol, _box(0.022, 0.009, 0.007), Vector3(0, 0.028, -0.020), metal)   # rear sight
 	for i in 4:                                                                    # slide serrations
@@ -420,8 +437,11 @@ func attach_weapon() -> void:
 	grip.position = Vector3(0, -0.030, 0.010)
 	grip.rotation.x = deg_to_rad(-16.0)
 	_pistol.add_child(grip)
-	_part(grip, _box(0.030, 0.115, 0.048), Vector3(0, -0.052, 0), poly)
-	_part(grip, _box(0.032, 0.010, 0.050), Vector3(0, -0.108, 0), steel)
+	_part(grip, _box(0.028, 0.112, 0.046), Vector3(0, -0.052, 0), grip_mat)
+	# finger grooves down the front strap, which is what makes a grip look like a grip
+	for i in 3:
+		_part(grip, _box(0.026, 0.006, 0.048), Vector3(0, -0.022 - 0.030 * i, 0.001), poly)
+	_part(grip, _box(0.030, 0.010, 0.048), Vector3(0, -0.108, 0), steel)   # magazine base
 	# trigger guard as a real loop, with the trigger inside it
 	var guard := TorusMesh.new()
 	guard.inner_radius = 0.016
@@ -430,13 +450,19 @@ func attach_weapon() -> void:
 	_part(_pistol, _box(0.005, 0.020, 0.006), Vector3(0, -0.048, 0.036), steel)
 
 	_shotgun = Node3D.new()
-	_part(_shotgun, _box(0.042, 0.058, 0.150), Vector3(0, 0.006, 0.010), metal)   # receiver
+	_part(_shotgun, _box(0.042, 0.058, 0.150), Vector3(0, 0.006, 0.010), blued)   # receiver
+	_part(_shotgun, _box(0.006, 0.010, 0.020), Vector3(-0.022, -0.010, 0.020), steel) # action bar
+	_part(_shotgun, _box(0.008, 0.008, 0.008), Vector3(0, 0.032, 0.000), steel)   # safety
 	_part(_shotgun, _box(0.020, 0.020, 0.008), Vector3(0.024, 0.012, 0.030), poly)  # port
 	var sbarrel := _cyl(0.0115, 0.0115, 0.470)
-	_part(_shotgun, sbarrel, Vector3(0, 0.020, 0.320), steel, Vector3(PI * 0.5, 0, 0))
+	_part(_shotgun, sbarrel, Vector3(0, 0.020, 0.320), blued, Vector3(PI * 0.5, 0, 0))
 	var tube := _cyl(0.0090, 0.0090, 0.400)
 	_part(_shotgun, tube, Vector3(0, -0.008, 0.290), metal, Vector3(PI * 0.5, 0, 0))
-	_part(_shotgun, _box(0.006, 0.010, 0.006), Vector3(0, 0.034, 0.548), steel)   # bead
+	# a ROUND bead: it is the one part you actually aim by, and as a box it vanished
+	var bead := SphereMesh.new()
+	bead.radius = 0.0040
+	bead.height = 0.0080
+	_part(_shotgun, bead, Vector3(0, 0.035, 0.556), steel)
 	_part(_shotgun, _box(0.046, 0.042, 0.130), Vector3(0, -0.004, 0.190), poly)   # forend
 	for i in 5:                                                                    # forend ribs
 		_part(_shotgun, _box(0.048, 0.044, 0.004), Vector3(0, -0.004, 0.146 + 0.022 * i), poly)
