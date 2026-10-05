@@ -382,6 +382,7 @@ static func build_wall_run(parent: Node3D, run: Rect2, open_bays := {}) -> void:
 	var sx := step / WALL_SRC_W
 	var sy := WALL_TARGET_H / WALL_SRC_H
 	var sz := WALL_TARGET_D / WALL_SRC_D
+	var thickness: float = run.size.y if horizontal else run.size.x
 
 	for i in bays:
 		# There is no doorway model in play here. The front door is a GAP between two
@@ -413,6 +414,64 @@ static func build_wall_run(parent: Node3D, run: Rect2, open_bays := {}) -> void:
 		# branch that swapped them on a Z run would build the side walls 2 m thick.
 		var sc := Vector3(sx, sy, sz)
 		use_clean_wall_texture(place(parent, "restaurant", model, Vector3(x, 0, z), rot, false, sc))
+
+		if open_bays.has(i) and model == "wall_window_closed":
+			_window_trim(parent, Vector3(x, 0, z), horizontal, step, thickness)
+
+
+## A window sill and head, plus curtains behind the glass.
+##
+## Placed here because this is the only function that knows where the bays are. The sill and
+## head span the FULL wall thickness plus 6 cm, so one box protrudes on both faces at once and
+## this does not have to know which side of the wall is inside — the same trick the skirting
+## uses. The curtains DO need to know, and get it by pointing at the middle of the house.
+##
+## Heights are measured off a render rather than read from the model: the window sits in the
+## upper half of the panel, roughly 1.0-2.0 m up.
+const WINDOW_SILL_Y := 1.02
+const WINDOW_HEAD_Y := 2.06
+
+
+static func _window_trim(parent: Node3D, at: Vector3, horizontal: bool, bay: float,
+		thickness: float) -> void:
+	var trim := _flat(Color(0.94, 0.93, 0.91))
+	var cloth := _flat(Color(0.32, 0.30, 0.36))
+	var w := bay * 0.92
+	var deep := thickness + 0.06
+
+	for spec in [[WINDOW_SILL_Y, 0.07], [WINDOW_HEAD_Y, 0.06]]:
+		var m := MeshInstance3D.new()
+		var b := BoxMesh.new()
+		b.size = Vector3(w, float(spec[1]), deep) if horizontal \
+			else Vector3(deep, float(spec[1]), w)
+		m.mesh = b
+		m.position = Vector3(at.x, float(spec[0]), at.z)
+		m.material_override = trim
+		parent.add_child(m)
+
+	# curtains hang just inside the inner face
+	var house := Sim.HOUSE
+	var centre := Vector3(house.position.x + house.size.x * 0.5, 0.0,
+		house.position.y + house.size.y * 0.5)
+	var inward := (centre - Vector3(at.x, 0.0, at.z))
+	inward.y = 0.0
+	if inward.length_squared() < 0.0001:
+		return
+	inward = inward.normalized() * (thickness * 0.5 + 0.05)
+
+	var drop := WINDOW_HEAD_Y - WINDOW_SILL_Y
+	for side in [-1.0, 1.0]:
+		var c := MeshInstance3D.new()
+		var cb := BoxMesh.new()
+		cb.size = Vector3(bay * 0.30, drop, 0.035) if horizontal \
+			else Vector3(0.035, drop, bay * 0.30)
+		c.mesh = cb
+		var off: float = float(side) * bay * 0.32
+		var p := Vector3(at.x + (off if horizontal else 0.0), WINDOW_SILL_Y + drop * 0.5,
+			at.z + (0.0 if horizontal else off)) + inward
+		c.position = p
+		c.material_override = cloth
+		parent.add_child(c)
 
 
 static func build_walls(parent: Node3D) -> void:
