@@ -77,14 +77,26 @@ func _process_modification() -> void:
 	var sk := get_skeleton()
 	if sk == null:
 		return
-	# The axis is taken from the HAND's own basis, so this needs to know nothing about the
-	# character's yaw or which way the arm happens to be pointing.
-	var hb := sk.get_bone_global_pose(_hand).basis
-	var a := hb.x if axis == 0 else (hb.y if axis == 1 else hb.z)
-	a = a.normalized() * axis_sign
-	var q := Quaternion(a, per_joint * weight)
+	# LOCAL rotation, not a global override, and that is the whole correction.
+	#
+	# The first version used `set_bone_global_pose_override` on every finger joint — the
+	# technique that works for the shoulder in carry_pose.gd — and it stretched the fingers
+	# into long noodles. The reason is that a global override sets each bone's pose
+	# INDEPENDENTLY, so the chain came apart: a shoulder is a single joint and does not care,
+	# a finger is three joints in a row and very much does.
+	#
+	# A local rotation is also safe here in a way it was not for the shoulder. The measured
+	# complaint about local rotations (0.039 m of hand movement against a 0.023 m control) was
+	# about moving an ARM, where the bone's own length axis dominates. And the AnimationPlayer
+	# only rewrites bones a clip actually animates — these clips animate no fingers, so
+	# nothing overwrites this.
+	var q := Quaternion(_axis_vec(), per_joint * weight)
 	for b in _chain:
-		var g := sk.get_bone_global_pose(b)
-		# PERSISTENT — see the header.
-		sk.set_bone_global_pose_override(b, Transform3D(Basis(q) * g.basis, g.origin),
-			weight, true)
+		sk.set_bone_pose_rotation(b, sk.get_bone_pose_rotation(b) * q)
+
+
+## The curl axis, taken in each bone's OWN local space. Mixamo finger bones run along local
+## Y, so a curl is about X or Z; test/probe_grip.gd decides which.
+func _axis_vec() -> Vector3:
+	var a := Vector3(1, 0, 0) if axis == 0 else (Vector3(0, 1, 0) if axis == 1 else Vector3(0, 0, 1))
+	return a * axis_sign

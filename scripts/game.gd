@@ -876,14 +876,8 @@ func _process(delta: float) -> void:
 		# and a gun floating in mid-air beside his shoulder reads as detached once you can
 		# actually see him. update_weapon points it along the aim from the hand bone.
 		player_actor.update_weapon(_aim_dir())
-		# GRIP IS DISABLED. `grip_pose.gd` deforms the hand badly — the fingers stretch
-		# into long noodles — because a global pose override on each finger joint
-		# independently breaks the chain. The measurement that chose the axis was also
-		# inadequate: mean fingertip-to-PALM distance shrinks under many rotations, not only
-		# a curl, so it reported a "close" that was really a splay. The right test is
-		# fingertip distance to the GRIP, which is fixed in the hand's own space. Until that
-		# exists this stays at zero rather than shipping a deformed hand.
-		player_actor.set_grip(0.0)
+		# he is always holding a weapon, so his hand is always closed on one
+		player_actor.set_grip(1.0)
 	_update_crosshair()
 	# Close the hand on whatever he is carrying. Deliberately last, and only possible
 	# because of process_priority in _ready: the AnimationPlayer rewrites the pose during
@@ -1173,8 +1167,9 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 	# drawn one always could.
 	thief_actor.set_weapon("pistol" if (thief["alive"] and thief["carry"] == "") else "none")
 	thief_actor.update_weapon(_thief_aim(tp, sees))
-	# disabled alongside the player's — see the note above
-	thief_actor.set_grip(0.0)
+	# he shows a pistol only while his hands are empty, and the same condition decides
+	# whether he can fire — so the fist closes on exactly the same test
+	thief_actor.set_grip(1.0 if String(thief["carry"]) == "" else 0.0)
 	# after update_weapon, because the kit follows bones the animation has just written
 	thief_actor.update_kit()
 	var laden: bool = thief.get("carry", "") != ""

@@ -61,18 +61,15 @@ func _measure(axis: int, s: float) -> float:
 		return 99.0
 
 	if axis >= 0:
-		var hb := sk.get_bone_global_pose(hand).basis
-		var a: Vector3 = hb.x if axis == 0 else (hb.y if axis == 1 else hb.z)
-		a = a.normalized() * s
-		var q := Quaternion(a, CURL)
+		# LOCAL rotation about the bone's own axis: the chain stays connected, so a fall in
+		# fingertip-to-palm distance here really does mean the hand closed.
+		var a := Vector3(1, 0, 0) if axis == 0 else (Vector3(0, 1, 0) if axis == 1 else Vector3(0, 0, 1))
+		var q := Quaternion(a * s, CURL)
 		for f in FINGERS:
 			for j in range(1, 5):
 				var b := _bone(sk, "RightHand%s%d" % [f, j])
-				if b < 0:
-					continue
-				var g := sk.get_bone_global_pose(b)
-				sk.set_bone_global_pose_override(b,
-					Transform3D(Basis(q) * g.basis, g.origin), 1.0, true)
+				if b >= 0:
+					sk.set_bone_pose_rotation(b, sk.get_bone_pose_rotation(b) * q)
 		sk.force_update_all_bone_transforms()
 
 	var palm := sk.get_bone_global_pose(hand).origin
