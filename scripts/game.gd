@@ -1698,11 +1698,20 @@ func _build_audio() -> void:
 	if idle != null:
 		var v := AudioStreamPlayer3D.new()
 		v.stream = idle
-		v.global_position = Vector3(Sim.VAN.position.x + Sim.VAN.size.x * 0.5, 1.0,
-			Sim.VAN.position.y + Sim.VAN.size.y * 0.5)
 		v.max_distance = 60.0
 		v.unit_size = 12.0
 		v.volume_db = -6.0
+		# THE CHILD MUST BE ADDED BEFORE ITS GLOBAL TRANSFORM IS SET. `global_position`
+		# is computed from the parent's transform, so writing it while the node is
+		# outside the tree is silently dropped — Godot logs
+		# `Condition "!is_inside_tree()" is true` and the node keeps the origin. The van
+		# idle therefore played from the world origin instead of the driveway, which for
+		# a 3D positional source is the difference between "someone has arrived" and a
+		# hum in the middle of the lawn. The assignment below is positioned relative to
+		# the parent, and `add_child` first is what makes it land.
+		add_child(v)
+		v.global_position = Vector3(Sim.VAN.position.x + Sim.VAN.size.x * 0.5, 1.0,
+			Sim.VAN.position.y + Sim.VAN.size.y * 0.5)
 		if idle is AudioStreamWAV:
 			var w := idle as AudioStreamWAV
 			w.loop_mode = AudioStreamWAV.LOOP_FORWARD
@@ -1712,7 +1721,6 @@ func _build_audio() -> void:
 			# EXACTLY zero, which a continuous idle makes impossible.
 			w.loop_begin = 0
 			w.loop_end = int(w.get_length() * float(w.mix_rate))
-		add_child(v)
 		v.play()
 
 

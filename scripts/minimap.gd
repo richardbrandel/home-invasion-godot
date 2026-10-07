@@ -60,6 +60,31 @@ func _rect(r: Rect2, c: Color) -> void:
 	draw_rect(Rect2(_to_map(r.position), r.size * _scale), c, true)
 
 
+## One triangle of the lit-floor fan, in MAP space.
+##
+## Degenerate triangles are dropped rather than drawn: measured, 3.9% of the fan's triangles
+## have an area under 1e-7 (they come from the +/-1e-4 rad corner triplets, whose three rays
+## land within a hair of each other), and issuing them would be 11,000 wasted draw
+## primitives per polygon for nothing.
+##
+## The winding is normalised by ordering the two outer points, so every triangle is drawn
+## the same way round. `draw_primitive` does not backface-cull, so this is cosmetic — but an
+## inconsistent winding in a fan is the kind of thing that becomes a real bug the moment
+## anything downstream starts caring about it.
+func _floor_tri(a: Vector2, b: Vector2, c: Vector2) -> void:
+	if absf((b - a).cross(c - a)) < 1e-7:
+		return
+	var pts := PackedVector2Array([a, b, c])
+	# UVs are REQUIRED, not optional: the signature is
+	# draw_primitive(points, colors, uvs, texture=null) — three arguments minimum. Passing
+	# only points and colours is a parse error, and because the whole script then fails to
+	# load, the minimap silently does not draw at all while the game runs on. That is a
+	# pass-shaped nothing: the triangulation error count went to zero because nothing was
+	# calling draw_colored_polygon any more, not because it had been fixed.
+	var uv := PackedVector2Array([Vector2.ZERO, Vector2.ZERO, Vector2.ZERO])
+	draw_primitive(pts, PackedColorArray([C_FLOOR_LIT, C_FLOOR_LIT, C_FLOOR_LIT]), uv)
+
+
 ## `t` is either one intruder dictionary (the single-intruder case, kept working) or an
 ## array of them. The minimap used to take exactly one body; with three it drew whichever
 ## one `game.gd` happened to pass and silently hid the other two.
@@ -88,21 +113,33 @@ func _draw() -> void:
 
 	# ---- lit layer, clipped to what the player can actually see
 	#
-	# KNOWN ISSUE: from some player positions Godot refuses to triangulate this
-	# polygon ("Invalid polygon data, triangulation failed") and the lit floor is
-	# simply not drawn; everything else on the minimap is unaffected. The cause is
-	# the +/-1e-4 rad corner pairs in Sim.visibility_polygon producing zero-area
-	# sliver triangles, which ear-clipping rejects. Deduplicating coincident
-	# points does NOT fix it (tried) — it needs angular decimation, which risks
-	# visibly rounding off corners. Left alone deliberately; see AGENTS.md.
+	# DRAWN AS A TRIANGLE FAN, not as a filled polygon. `draw_colored_polygon` hands the
+	# outline to Godot's ear-clipper, which REJECTS this outline: it is not simple — 64% of
+	# positions have two edges that properly cross — so the lit floor used to vanish on
+	# almost every frame (measured: 238 of 240 frames in a real run) with
+	# "Invalid polygon data, triangulation failed" in the console.
+	#
+	# The crossings come from the EDGE JOINING consecutive rays, and they do not affect the
+	# triangles that share the viewer as their apex. `Sim.visibility_polygon` builds the
+	# outline by sorting rays by ANGLE FROM THE VIEWER, so it is star-shaped about that
+	# point by construction, and the fan of (viewer, pts[i], pts[i+1]) tiles the visible
+	# union correctly even where the outline crosses itself.
+	#
+	# `draw_primitive` triangulates nothing — it takes three points and draws them — so the
+	# clipper is bypassed entirely. Verified against `Sim.los_blocked` as ground truth
+	# (test/probe_fan.gd): 98.85% of the visible area lit, 0.14% leaking through walls.
+	# The alternative — rebuilding the lit region from per-solid-edge silhouettes — was
+	# measured at 93% HOLES, i.e. far worse, and is why this stays a one-file fix.
 	if _poly.size() > 2:
-		var pts := PackedVector2Array()
-		for p in _poly:
-			pts.append(_to_map(p))
-		draw_colored_polygon(pts, C_FLOOR_LIT)
+		var mv := _to_map(ppos)
+		for i in range(1, _poly.size() - 1):
+			_floor_tri(mv, _to_map(_poly[i]), _to_map(_poly[i + 1]))
 
-		# walls and furniture inside the lit region, drawn bright. Godot has no
-		# canvas clip in _draw, so membership is tested per rect centre instead.
+	# walls and furniture inside the lit region, drawn bright. Godot has no canvas clip in
+	# _draw, so membership is tested per rect centre instead. The test runs against the
+	# OUTLINE, which is fine here: `_inside_poly` is an even-odd crossing count, which is
+	# well-defined on a self-intersecting path in a way ear-clipping is not.
+	if _poly.size() > 2:
 		for w in Sim.WALLS:
 			if _inside_poly(_to_map(w.position + w.size * 0.5)):
 				_rect(w, C_WALL_LIT)
