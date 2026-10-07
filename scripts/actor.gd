@@ -64,6 +64,10 @@ var anim: AnimationPlayer
 var ground_offset := 0.0
 var base_scale := 1.0
 var merged := 0
+## Pre-tint albedo per body mesh, keyed by instance id, so `tint_body` can re-tint from
+## the original colour instead of compounding on a previous tint.
+var _body_untouched := {}
+
 var _pistol: Node3D = null
 var _shotgun: Node3D = null
 var _holder: Node3D
@@ -641,6 +645,36 @@ func _bone_tf(suffix: String) -> Transform3D:
 
 ## Called every frame, AFTER the animation has written the pose. A bone global read before
 ## that is last frame's, which makes the hat lag by a frame and swim on the head.
+## Tint this body so several copies of it can be told apart. Multiplies whatever the
+## material already carries — including the darkening — rather than replacing it, because
+## that darkening is what makes the mesh read as clothing rather than bare skin.
+##
+## Only `root` is walked, for the same reason `attach_kit()` walks only root: the weapons
+## and kit live BESIDE root, so tinting one man's body cannot recolour his pistol or
+## another man's hat. Re-tinting is safe — the base colour is remembered, so a second call
+## does not compound the first.
+func tint_body(tint: Color) -> void:
+	if root == null:
+		return
+	for mi in _body_meshes(root):
+		var m := mi.material_override as StandardMaterial3D
+		if m == null:
+			continue
+		if not _body_untouched.has(mi.get_instance_id()):
+			_body_untouched[mi.get_instance_id()] = m.albedo_color
+		m.albedo_color = (_body_untouched[mi.get_instance_id()] as Color) * tint
+
+
+## Every body MeshInstance under `node` carrying our material override.
+func _body_meshes(node: Node) -> Array:
+	var out: Array = []
+	for c in node.get_children():
+		if c is MeshInstance3D and (c as MeshInstance3D).material_override is StandardMaterial3D:
+			out.append(c)
+		out.append_array(_body_meshes(c))
+	return out
+
+
 func update_kit() -> void:
 	if kit_root == null or _skeleton == null:
 		return

@@ -18,15 +18,41 @@ const CHAR_PLAYER := "res://assets/mixamo/player"
 const CHAR_THIEF := "res://assets/mixamo/thief"
 const CHAR_SCALE := 1.0
 
+## How many intruders the round is played against. Overridable with `--thieves=N`
+## so a one-, two- and three-intruder round can be compared without an edit, which
+## matters while the balance is still moving. Three is the design target (one
+## defender against up to three intruders); one keeps the old behaviour available
+## for A/B, and is what every earlier build of this game actually was.
+const THIEF_COUNT := 3
+
+## One body tint per intruder, multiplied into the dark clothing material. Three
+## identical black silhouettes are unplayable — you cannot tell which of them is
+## carrying your television, and with player-intruders later you cannot tell which
+## one is your friend. The values stay DARK on purpose: the point of darkening the
+## body was to make him read as a burglar, and these only have to be distinguishable
+## from each other, not from the furniture.
+const THIEF_TINTS: Array[Color] = [
+	Color(1.00, 1.00, 1.00),   # as authored
+	Color(0.72, 0.86, 1.00),   # cold blue
+	Color(1.00, 0.82, 0.66),   # warm brown
+	Color(0.82, 1.00, 0.80),   # green
+]
+
 var player := {}
+## The primary intruder, kept as a single reference so the HUD, minimap and the
+## single-target presentation paths do not all have to become loops at once. It is
+## always `intruders[0]` while that one is alive — see `_retarget_primary()`. Use
+## `intruders` for anything that must cover all of them.
 var thief := {}
+var intruders: Array = []
 var loot: Array = []
 var events: Array = []
 var state := "play"
 
 var player_actor: Actor
 var thief_actor: Actor
-var thief_hitbox: StaticBody3D
+var thief_actors: Array[Actor] = []
+var thief_hitboxes: Array = []
 var cam: Camera3D
 var sun: DirectionalLight3D
 var minimap: Minimap
@@ -171,6 +197,10 @@ var _van_t := 0.0
 ## Set when he breaks off and runs, so the loss text can say how much he got away with
 ## rather than claiming he took everything.
 var _ran_off := false
+## How many intruders have been put down this round. The round is won when it reaches
+## the count that started it; a single thiefDown used to be the win, which for three
+## intruders would have ended the game with two of them still inside the house.
+var _thieves_down := 0
 var _escaped_with := 0
 ## The last zone a shot struck, for capture mode only — a raycast reports a shape INDEX and
 ## nothing else, and an index tells you nothing about whether the zones are where you think.
@@ -196,8 +226,10 @@ var _pool: Array[AudioStreamPlayer3D] = []
 var _pool_i := 0
 var _sfx := {}
 var _step_player := 0.0
-var _step_thief := 0.0
-var _thief_door_z := 0.0
+## One entry per intruder, grown on demand: footfall timer, and the last z each body
+## was at so the front-door crossing can be detected per man rather than for "the" thief.
+var _step_thieves: Array[float] = []
+var _thief_door_z: Array[float] = []
 
 # Debug: `godot --path . -- --shot` renders 120 frames, writes shot.png next to
 # the project and quits. Lets the build be verified visually without a human.
@@ -495,29 +527,50 @@ func _spawn_actors() -> void:
 		# reset(), so name the starting weapon literally rather than reading it
 		player_actor.set_weapon("pistol")
 
-	thief_actor = Actor.create(CHAR_THIEF, CHAR_SCALE)
-	if thief_actor.root != null:
-		add_child(thief_actor.root)
-		House.ground_node(thief_actor.root)
-		thief_actor.ground_offset = thief_actor.root.position.y
-		# he carries a pistol as well; _update_actors holsters it while he is loaded up
-		thief_actor.attach_weapon()
-		thief_actor.attach_grip_pose()
-		thief_actor.attach_kit()
-		thief_actor.attach_carry_pose()
-		thief_actor.set_weapon("pistol")
+	for i in _thief_count():
+		var a := Actor.create(CHAR_THIEF, CHAR_SCALE)
+		if a.root != null:
+			add_child(a.root)
+			House.ground_node(a.root)
+			a.ground_offset = a.root.position.y
+			# he carries a pistol as well; _update_actors holsters it while he is loaded up
+			a.attach_weapon()
+			a.attach_grip_pose()
+			a.attach_kit()
+			a.attach_carry_pose()
+			a.set_weapon("pistol")
+			# give each body its own tint so three intruders are tellable apart
+			a.tint_body(THIEF_TINTS[i % THIEF_TINTS.size()])
+		thief_actors.append(a)
+		thief_hitboxes.append(_build_thief_hitbox(i))
+	# the primary pointer follows intruder 0 while he is up; the HUD and minimap read it
+	thief_actor = thief_actors[0] if not thief_actors.is_empty() else null
 
-	# a separate body so bullet rays can tell the thief from the scenery.
-	#
-	# It carries THREE shapes, because a shot to the leg is not a shot to the chest — the
-	# audit's "a shot to the leg equals one to the chest". The shape index comes back on the
-	# raycast hit, so knowing which zone was struck costs nothing at all.
-	# Heights are for a 1.75 m man and deliberately OVERLAP: a gap between zones is a hole
-	# a bullet can pass through without hitting him.
-	thief_hitbox = StaticBody3D.new()
-	thief_hitbox.name = "ThiefHitbox"
-	thief_hitbox.collision_layer = LAYER_THIEF
-	thief_hitbox.collision_mask = 0
+## How many intruders this round is played against: the constant, overridable by
+## `--thieves=N` on the command line so a one- and three-intruder round can be compared
+## without an edit while the balance is still moving.
+func _thief_count() -> int:
+	for arg in OS.get_cmdline_user_args():
+		if String(arg).begins_with("--thieves="):
+			return clampi(int(String(arg).split("=")[1]), 1, THIEF_TINTS.size())
+	return THIEF_COUNT
+
+
+## One intruder's hitbox. It carries THREE shapes, because a shot to the leg is not a
+## shot to the chest — the audit's "a shot to the leg equals one to the chest". The shape
+## index comes back on the raycast hit, so knowing which zone was struck costs nothing.
+## Heights are for a 1.75 m man and deliberately OVERLAP: a gap between zones is a hole a
+## bullet can pass through without hitting him.
+##
+## One body per intruder, each on LAYER_THIEF, named by index so a ray that hits
+## "ThiefHitbox1" identifies which of them was shot. The single-thief version was called
+## plain "ThiefHitbox", which is why index 0 keeps that name — nothing that looks for it
+## by name has to change.
+func _build_thief_hitbox(index: int) -> StaticBody3D:
+	var body := StaticBody3D.new()
+	body.name = "ThiefHitbox" if index == 0 else "ThiefHitbox%d" % index
+	body.collision_layer = LAYER_THIEF
+	body.collision_mask = 0
 	for z in HIT_ZONES:
 		var cs := CollisionShape3D.new()
 		if String(z["shape"]) == "sphere":
@@ -530,8 +583,23 @@ func _spawn_actors() -> void:
 			cap.height = float(z["h"])
 			cs.shape = cap
 		cs.position = Vector3(0, float(z["y"]), 0)
-		thief_hitbox.add_child(cs)
-	add_child(thief_hitbox)
+		body.add_child(cs)
+	add_child(body)
+	return body
+
+
+## Which intruder index a collider belongs to, or -1 if it is not one of them.
+## Raycast hits name the body, so this is how a shot is attributed to a man rather
+## than to "the thief" — with three of them that distinction is the whole thing.
+func _intruder_index_of(collider: Object) -> int:
+	if collider == null:
+		return -1
+	var n := String((collider as Node).name)
+	if n == "ThiefHitbox":
+		return 0
+	if n.begins_with("ThiefHitbox"):
+		return int(n.substr("ThiefHitbox".length()))
+	return -1
 
 
 # ---------------------------------------------------------------------- loot
@@ -673,7 +741,8 @@ func _update_loot() -> void:
 # -------------------------------------------------------------------- state
 func reset() -> void:
 	player = Sim.create_player()
-	thief = Sim.create_thief()
+	intruders = Sim.create_intruders(_thief_count())
+	thief = intruders[0]
 	loot = Sim.create_loot()
 	events = []
 	state = "play"
@@ -683,6 +752,7 @@ func reset() -> void:
 	_van_phase = "arriving"
 	_van_t = 0.0
 	_ran_off = false
+	_thieves_down = 0
 	_escaped_with = 0
 	msg = "DEFEND YOUR HOME   \u2014   [F] shoves at close range"
 	msg_t = 2.4
@@ -858,7 +928,8 @@ func _process(delta: float) -> void:
 		and player["mag"] > 0 and float(player["stagger"]) <= 0.0:
 			_fire()
 
-		Sim.step_thief(thief, player, loot, events, delta)
+		Sim.step_intruders(intruders, player, loot, events, delta)
+		_retarget_primary()
 		_drain_events()
 
 	_update_actors(delta, playing, player_moving)
@@ -882,8 +953,10 @@ func _process(delta: float) -> void:
 	# Close the hand on whatever he is carrying. Deliberately last, and only possible
 	# because of process_priority in _ready: the AnimationPlayer rewrites the pose during
 	# its own step, so a grip applied any earlier is gone before the frame is drawn.
-	if thief_actor != null and thief_actor.root != null:
-		thief_actor.grip(1.15 if thief.get("carry", "") != "" else 0.0)
+	for i in thief_actors.size():
+		var pa: Actor = thief_actors[i]
+		if pa != null and pa.root != null and i < intruders.size():
+			pa.grip(1.15 if String((intruders[i] as Dictionary).get("carry", "")) != "" else 0.0)
 	_update_tracers(delta)
 	if _flash != null and _flash_t > 0.0:
 		_flash_t -= delta
@@ -926,14 +999,19 @@ func _process(delta: float) -> void:
 	# held intruder delivers on the first frame and there is nothing left to photograph. I
 	# measured a delivered TV sitting on the ground twice before spotting that.
 	if OS.get_cmdline_user_args().has("--dbg-hold"):
-		thief["route"] = []
-		thief["think"] = 0.0
-		thief["stagger"] = 0.0
-		# and stand him in the dining room, because his spawn IS the drop point: held at
-		# spawn he delivers on the first frame and there is nothing left to photograph
-		thief["pos"] = Vector2(1.0, -11.6)
-		thief["prev"] = Vector2(1.0, -11.6)
-		thief["yaw"] = 0.4
+		# EVERY body, not just the primary: a three-intruder capture that held only one
+		# would still have the other two walking the house out from under the camera.
+		for i in intruders.size():
+			var held: Dictionary = intruders[i]
+			held["route"] = []
+			held["think"] = 0.0
+			held["stagger"] = 0.0
+			# and stand him in the dining room, because his spawn IS the drop point: held
+			# at spawn he delivers on the first frame and there is nothing left to photograph.
+			# Fanned so three held bodies are not stacked inside one another.
+			held["pos"] = Vector2(1.0 + float(i - 1) * 0.9, -11.6)
+			held["prev"] = held["pos"]
+			held["yaw"] = 0.4
 	if _shot_carry != "":
 		thief["carry"] = _shot_carry
 		for l in loot:
@@ -967,25 +1045,87 @@ func _capture_and_quit() -> void:
 	get_tree().quit()
 
 
+## Point `thief` at a living intruder, preferring the current one and then the lowest
+## index. The HUD, the minimap and the single-target presentation paths read `thief`;
+## without this they would go on describing a man lying dead on the porch while two
+## others walked his television out of the front door.
+##
+## Deliberately NOT "the nearest" or "the one you can see": that would make the HUD jump
+## between bodies as they crossed behind walls, and a readout that changes identity on its
+## own is worse than one that is briefly about the wrong man.
+func _retarget_primary() -> void:
+	if intruders.is_empty():
+		thief = {}
+		return
+	var current := _intruder_index_by_id(int(thief.get("id", -1)))
+	if current >= 0 and bool((intruders[current] as Dictionary)["alive"]):
+		return
+	for i in intruders.size():
+		if bool((intruders[i] as Dictionary)["alive"]):
+			thief = intruders[i]
+			thief_actor = thief_actors[i] if i < thief_actors.size() else null
+			return
+	# nobody left standing: keep showing the last body
+	thief = intruders[0]
+
+
+## Index into `intruders` of the intruder with this sim id, or -1.
+## Is any intruder still alive? The win condition for one-or-more bodies.
+func _any_intruder_standing() -> bool:
+	for t in intruders:
+		if bool((t as Dictionary)["alive"]):
+			return true
+	return false
+
+
+func _intruder_index_by_id(id: int) -> int:
+	for i in intruders.size():
+		if int((intruders[i] as Dictionary).get("id", -1)) == id:
+			return i
+	return -1
+
+
+func _intruder(index: int) -> Dictionary:
+	if index < 0 or index >= intruders.size():
+		return {}
+	return intruders[index]
+
+
+func _thief_actor_for(index: int) -> Actor:
+	if index < 0 or index >= thief_actors.size():
+		return null
+	return thief_actors[index]
+
+
 func _drain_events() -> void:
 	for ev in events:
+		# Which body does this belong to? Every per-body event carries its emitter's id
+		# (stamped in Sim.step_intruders). Without this, three intruders all animate and
+		# sound from event 0 — one man firing, three muzzles flashing, and the wrong
+		# corpse reacting to a bullet. `sirens` and `allStolen` are global and have no id.
+		var who := _intruder_index_by_id(int(ev.get("id", -1)))
+		var who_thief: Dictionary = _intruder(who) if who >= 0 else thief
+		var who_actor: Actor = _thief_actor_for(who) if who >= 0 else thief_actor
 		match ev["type"]:
 			"thiefShot":
 				# He used to damage you by standing still: sim.gd fired him and nothing
 				# ever played the clip. Actor.SHOOT was only ever referenced for the
 				# player.
-				if thief_actor != null and thief["alive"]:
-					thief_actor.play_once(Actor.SHOOT)
+				if who_actor != null and bool(who_thief.get("alive", false)):
+					who_actor.play_once(Actor.SHOOT)
 				_play_at("gunshot_pistol",
-					Vector3(thief["pos"].x, 1.3, thief["pos"].y), -3.0)
-				var shot_from := Vector3(thief["pos"].x, 1.3, thief["pos"].y)
+					Vector3(who_thief["pos"].x, 1.3, who_thief["pos"].y), -3.0)
+				var shot_from := Vector3(who_thief["pos"].x, 1.3, who_thief["pos"].y)
 				var shot_to := Vector3(player["pos"].x, 1.3, player["pos"].y)
 				# HIS ROUND IS A RAY NOW. It used to be a probability roll on a line with
 				# geometry never consulted, so nothing in the house could stop it — a wall
 				# between the two of you was simply not part of the calculation.
 				var wall_q := PhysicsRayQueryParameters3D.create(shot_from, shot_to)
 				wall_q.collision_mask = LAYER_WORLD
-				wall_q.exclude = [thief_hitbox.get_rid()] if thief_hitbox != null else []
+				# exclude the SHOOTER's own hitbox, or his round hits himself
+				var own_box: StaticBody3D = thief_hitboxes[who] if who >= 0 \
+					and who < thief_hitboxes.size() else null
+				wall_q.exclude = [own_box.get_rid()] if own_box != null else []
 				var wall := get_world_3d().direct_space_state.intersect_ray(wall_q)
 				if not wall.is_empty():
 					# it strikes the wall, and the tracer STOPS there rather than
@@ -999,7 +1139,7 @@ func _drain_events() -> void:
 					_add_tracer(shot_from, shot_to)
 					# Bearing to him in the homeowner's own frame: forward is (sin, cos),
 					# right is (-cos, sin), and atan2(right, forward) is the screen angle.
-					var d := (thief["pos"] as Vector2) - (player["pos"] as Vector2)
+					var d := (who_thief["pos"] as Vector2) - (player["pos"] as Vector2)
 					var fwd := Vector2(sin(yaw), cos(yaw))
 					var rgt := Vector2(-cos(yaw), sin(yaw))
 					_hit_from = atan2(d.dot(rgt), d.dot(fwd))
@@ -1017,14 +1157,14 @@ func _drain_events() -> void:
 				msg = "They grabbed the %s!" % ev["label"]
 				msg_t = 1.8
 				# a reach, not a teleport. 3.43 s clip; the window is the stoop only.
-				if thief_actor != null and thief_actor.has_clip(Actor.PICKUP):
-					thief_actor.play_for(Actor.PICKUP, 1.3)
+				if who_actor != null and who_actor.has_clip(Actor.PICKUP):
+					who_actor.play_for(Actor.PICKUP, 1.3)
 			"thiefHit":
 				# sim.gd has always emitted this and game.gd has never read it, so
 				# shooting a man produced no feedback at all beyond a HUD counter.
-				_play_at("impact", Vector3(thief["pos"].x, 1.15, thief["pos"].y), -2.0)
-				if thief_actor != null and thief_actor.has_clip(Actor.HIT_REACT):
-					thief_actor.play_once(Actor.HIT_REACT)
+				_play_at("impact", Vector3(who_thief["pos"].x, 1.15, who_thief["pos"].y), -2.0)
+				if who_actor != null and who_actor.has_clip(Actor.HIT_REACT):
+					who_actor.play_once(Actor.HIT_REACT)
 			"playerHit":
 				_play_at("impact", Vector3(player["pos"].x, 1.15, player["pos"].y), 0.0)
 				if player_actor != null and player_actor.has_clip(Actor.HIT_REACT):
@@ -1040,8 +1180,8 @@ func _drain_events() -> void:
 			"thiefShove":
 				# He is on you. This is the one moment the game should feel like a fight
 				# rather than a duel, so it shoves the view as well as the message.
-				if thief_actor != null and thief_actor.has_clip(Actor.PUSH):
-					thief_actor.play_once(Actor.PUSH)
+				if who_actor != null and who_actor.has_clip(Actor.PUSH):
+					who_actor.play_once(Actor.PUSH)
 				msg = "He shoved you off!"
 				msg_t = 1.4
 				pitch = clampf(pitch + 0.10, PITCH_MIN, PITCH_MAX)
@@ -1053,8 +1193,8 @@ func _drain_events() -> void:
 				# YOU are the one shoving here, and he is the one going back.
 				if player_actor != null and player_actor.has_clip(Actor.PUSH):
 					player_actor.play_once(Actor.PUSH)
-				if thief_actor != null and thief_actor.has_clip(Actor.SHOVE_REACT):
-					thief_actor.play_for(Actor.SHOVE_REACT, 0.8)
+				if who_actor != null and who_actor.has_clip(Actor.SHOVE_REACT):
+					who_actor.play_for(Actor.SHOVE_REACT, 0.8)
 				if String(ev["dropped"]) != "":
 					msg = "You knocked the %s out of his hands!" % ev["dropped"]
 					msg_t = 2.2
@@ -1079,15 +1219,23 @@ func _drain_events() -> void:
 				# Whatever he was carrying falls where he does, rather than vanishing with
 				# him. It goes back into the world at his position, so the valuables are
 				# still findable after the round is won.
-				if String(thief["carry"]) != "":
+				if String(who_thief.get("carry", "")) != "":
 					for l in loot:
-						if String(l["label"]) == String(thief["carry"]):
+						if String(l["label"]) == String(who_thief["carry"]):
 							l["taken"] = false
 							l["delivered"] = false
-							l["pos"] = thief["pos"]
-					thief["carry"] = ""
-				state = "win"
-				_show_overlay(true)
+							l["pos"] = who_thief["pos"]
+					who_thief["carry"] = ""
+				# The round is NOT over while any of them is still up. His death ending the
+				# round was right for one intruder and is wrong for three: shooting the first
+				# man through the door would hand you a win with two still inside.
+				_thieves_down += 1
+				if not _any_intruder_standing():
+					state = "win"
+					_show_overlay(true)
+				else:
+					msg = "Down — %d still in the house" % (intruders.size() - _thieves_down)
+					msg_t = 2.0
 			"playerDown":
 				state = "lose"
 				_show_overlay(false)
@@ -1150,50 +1298,61 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 		# _strip_to_upper_body() removes the hips, so it no longer swivels him.
 		player_actor.play(Actor.AIM)
 
-	# ---- thief
-	thief_actor.tick(delta)
-	var tp: Vector2 = thief["pos"]
-	thief_actor.root.position = Vector3(tp.x, thief_actor.ground_offset, tp.y)
-	# the model faces +Z at rotation 0; Sim measures yaw from +X toward +Z
-	thief_actor.root.rotation.y = atan2(cos(thief["yaw"]), sin(thief["yaw"]))
-	thief_actor.root.visible = true
-	thief_hitbox.position = Vector3(tp.x, 0, tp.y)
+	# ---- intruders
+	#
+	# One pass per body. Everything here used to be a single `thief_actor` block; the only
+	# structural change is the loop and the `pa`/`t` pair, so each branch still reads as the
+	# same decision it always was. `continue` rather than `break` on a missing actor: with
+	# three of them, one body that failed to load must not blank out the others.
+	for i in intruders.size():
+		var t: Dictionary = intruders[i]
+		var pa: Actor = thief_actors[i] if i < thief_actors.size() else null
+		if pa == null or pa.root == null:
+			continue
+		pa.tick(delta)
+		var tp: Vector2 = t["pos"]
+		pa.root.position = Vector3(tp.x, pa.ground_offset, tp.y)
+		# the model faces +Z at rotation 0; Sim measures yaw from +X toward +Z
+		pa.root.rotation.y = atan2(cos(t["yaw"]), sin(t["yaw"]))
+		pa.root.visible = true
+		if i < thief_hitboxes.size():
+			(thief_hitboxes[i] as StaticBody3D).position = Vector3(tp.x, 0, tp.y)
 
-	var sees: bool = thief["alive"] and playing \
-		and Sim.thief_sees(tp, float(thief["yaw"]), player["pos"])
+		var sees: bool = t["alive"] and playing \
+			and Sim.thief_sees(tp, float(t["yaw"]), player["pos"])
 
-	# His pistol is out only while his hands are free — which is precisely when the
-	# sim lets him fire. Prop and rule agree, so a holstered gun never shoots and a
-	# drawn one always could.
-	thief_actor.set_weapon("pistol" if (thief["alive"] and thief["carry"] == "") else "none")
-	thief_actor.update_weapon(_thief_aim(tp, sees))
-	# he shows a pistol only while his hands are empty, and the same condition decides
-	# whether he can fire — so the fist closes on exactly the same test
-	thief_actor.set_grip(1.0 if String(thief["carry"]) == "" else 0.0)
-	# after update_weapon, because the kit follows bones the animation has just written
-	thief_actor.update_kit()
-	var laden: bool = thief.get("carry", "") != ""
-	# The hand-built carry pose is now the FALLBACK, not the mechanism. A real clip holds the
-	# load properly; the pose exists only so a fresh clone with no Mixamo assets still puts
-	# his arms somewhere sensible. Both at once would double-compensate.
-	var use_pose: bool = laden and not thief_actor.has_clip(Actor.CARRY_WALK)
-	thief_actor.set_carry(1.0 if use_pose else 0.0)
+		# His pistol is out only while his hands are free — which is precisely when the
+		# sim lets him fire. Prop and rule agree, so a holstered gun never shoots and a
+		# drawn one always could.
+		pa.set_weapon("pistol" if (t["alive"] and t["carry"] == "") else "none")
+		pa.update_weapon(_thief_aim(tp, sees, t))
+		# he shows a pistol only while his hands are empty, and the same condition decides
+		# whether he can fire — so the fist closes on exactly the same test
+		pa.set_grip(1.0 if String(t["carry"]) == "" else 0.0)
+		# after update_weapon, because the kit follows bones the animation has just written
+		pa.update_kit()
+		var laden: bool = t.get("carry", "") != ""
+		# The hand-built carry pose is now the FALLBACK, not the mechanism. A real clip holds
+		# the load properly; the pose exists only so a fresh clone with no Mixamo assets still
+		# puts his arms somewhere sensible. Both at once would double-compensate.
+		var use_pose: bool = laden and not pa.has_clip(Actor.CARRY_WALK)
+		pa.set_carry(1.0 if use_pose else 0.0)
 
-	if not thief["alive"]:
-		if thief_actor.has_clip(Actor.DEATH):
-			thief_actor.play(Actor.DEATH, 1.0)
-		thief_hitbox.collision_layer = 0
-	else:
-		thief_hitbox.collision_layer = LAYER_THIEF
-		var moving: bool = playing and (thief["route"] as Array).size() > 0
-		if laden and thief_actor.has_clip(Actor.CARRY_WALK):
+		if not t["alive"]:
+			if pa.has_clip(Actor.DEATH):
+				pa.play(Actor.DEATH, 1.0)
+			if i < thief_hitboxes.size():
+				(thief_hitboxes[i] as StaticBody3D).collision_layer = 0
+			continue
+		var moving: bool = playing and (t["route"] as Array).size() > 0
+		if laden and pa.has_clip(Actor.CARRY_WALK):
 			# He carries in both hands now, and walks differently while laden.
 			if moving:
 				var cc := Actor.CARRY_WALK
-				thief_actor.play(cc, _clip_speed(thief_actor, cc, Sim.THIEF_SPEED))
+				pa.play(cc, _clip_speed(pa, cc, Sim.THIEF_SPEED))
 			else:
-				thief_actor.play(Actor.CARRY_IDLE)
-		elif float(thief.get("think", 0.0)) > 0.0 and thief_actor.has_clip(Actor.LOOK_AROUND):
+				pa.play(Actor.CARRY_IDLE)
+		elif float(t.get("think", 0.0)) > 0.0 and pa.has_clip(Actor.LOOK_AROUND):
 			# The search dwell, which used to be a man standing perfectly still for 1.5 s
 			# and calling it looking around. `think` also covers the 2 s pause at the
 			# threshold before he commits, which the same clip suits.
@@ -1201,18 +1360,19 @@ func _update_actors(delta: float, playing: bool, player_moving: bool) -> void:
 			# THIS BRANCH MUST COME BEFORE `moving`. The sim skips his move loop while
 			# `think` is running, but his ROUTE is already non-empty, so testing `moving`
 			# first played the search for exactly one frame and then walked off mid-look.
-			thief_actor.play(Actor.LOOK_AROUND)
+			pa.play(Actor.LOOK_AROUND)
 		elif laden or moving:
 			# He only ever moves at THIEF_SPEED, so the run clip — authored at
 			# 5.6 m/s — played as a slow-motion sprint on the spot. The walk clip
 			# is the one that matches his actual pace, and using a single clip for
 			# both states also stops the model swapping gait on every grab.
-			thief_actor.play(Actor.WALK,
-				_clip_speed(thief_actor, Actor.WALK, Sim.THIEF_SPEED))
+			pa.play(Actor.WALK, _clip_speed(pa, Actor.WALK, Sim.THIEF_SPEED))
 		elif sees:
-			thief_actor.play(Actor.AIM)
+			pa.play(Actor.AIM)
 		else:
-			thief_actor.play(Actor.IDLE)
+			pa.play(Actor.IDLE)
+		if i < thief_hitboxes.size():
+			(thief_hitboxes[i] as StaticBody3D).collision_layer = LAYER_THIEF
 
 
 func _update_camera() -> void:
@@ -1260,10 +1420,10 @@ func _update_camera() -> void:
 ## Where the intruder points his pistol: at the homeowner when he can actually see
 ## him, and straight ahead otherwise. Tracking you through a wall would look wrong,
 ## and the sim already runs the same sight test for his trigger finger.
-func _thief_aim(tp: Vector2, sees: bool) -> Vector3:
+func _thief_aim(tp: Vector2, sees: bool, t: Dictionary) -> Vector3:
 	var from := Vector3(tp.x, 1.30, tp.y)
 	# Sim measures yaw from +X toward +Z, so his facing is (cos, sin) in XZ
-	var to := from + Vector3(cos(thief["yaw"]), 0.0, sin(thief["yaw"]))
+	var to := from + Vector3(cos(t["yaw"]), 0.0, sin(t["yaw"]))
 	if sees and player["alive"]:
 		to = Vector3(player["pos"].x, Sim.EYE_HEIGHT, player["pos"].y)
 	return (to - from).normalized()
@@ -1295,12 +1455,19 @@ func _fire() -> void:
 	pitch = clampf(pitch - kick, PITCH_MIN, PITCH_MAX)
 	recoil_recover += kick * 0.65
 	_play_own("gunshot_" + String(player["weapon"]))
-	# He hears it. A shotgun at room range is not the same event as a pistol across the
-	# house, and this is what gives the firearm a deterrent value beyond its damage.
-	var heard := clampf(1.6 - player["pos"].distance_to(thief["pos"]) / 18.0, 0.15, 1.6)
-	if String(player["weapon"]) == "shotgun":
-		heard *= 1.5
-	Sim.alert_thief(thief, player["pos"], heard)
+	# THEY hear it — all of them, each scaled by his own distance. Alerting only the
+	# primary would have left the other two calmly working the house while a shotgun went
+	# off two rooms away. A shotgun at room range is not the same event as a pistol across
+	# the house, and this is what gives the firearm a deterrent value beyond its damage.
+	var shotgun: bool = String(player["weapon"]) == "shotgun"
+	for t in intruders:
+		var it: Dictionary = t
+		if not bool(it["alive"]):
+			continue
+		var heard := clampf(1.6 - player["pos"].distance_to(it["pos"]) / 18.0, 0.15, 1.6)
+		if shotgun:
+			heard *= 1.5
+		Sim.alert_thief(it, player["pos"], heard)
 
 	# The ray starts at the CAMERA, not the eye. With the camera pulled back behind the
 	# homeowner those are different points, and casting from the eye while the crosshair
@@ -1338,8 +1505,12 @@ func _fire() -> void:
 		if not hit.is_empty():
 			end = hit["position"]
 			var collider = hit["collider"]
-			var hit_thief: bool = collider is Node \
-				and collider.name == "ThiefHitbox" and thief["alive"]
+			# Which body, not just "the thief". Every intruder hitbox is on LAYER_THIEF
+			# and named by index, so the name is what tells you whose leg you just shot.
+			# The old test compared against the literal "ThiefHitbox", which would have
+			# made all three bodies bulletproof the moment a second one existed.
+			var victim := _intruder_index_of(collider)
+			var hit_thief: bool = victim >= 0 and bool((intruders[victim] as Dictionary)["alive"])
 			if hit_thief:
 				var zone := int(hit.get("shape", 1))
 				var mult: float = HIT_MULT_DEFAULT
@@ -1350,7 +1521,13 @@ func _fire() -> void:
 				# Shot loses energy with distance. Pellets were doing their full damage
 				# at any range, so a shotgun was as lethal across the room as at the door.
 				var falloff: float = clampf(1.0 - origin.distance_to(end) / 28.0, 0.22, 1.0)
-				Sim.damage_thief(thief, float(spec["dmg"]) * mult * falloff, events)
+				# Attribute the damage to the body that was hit. `damage_thief` emits
+				# thiefHit/thiefDown without an id, so stamp it here — the round rules and
+				# the hit-reaction both need to know WHICH man went down.
+				var before := events.size()
+				Sim.damage_thief(intruders[victim], float(spec["dmg"]) * mult * falloff, events)
+				for ei in range(before, events.size()):
+					(events[ei] as Dictionary)["id"] = int((intruders[victim] as Dictionary)["id"])
 			# A mark on whatever it struck. The hit point has always been computed and then
 			# used ONLY as the tracer's end, so emptying a shotgun into a wardrobe left no
 			# sign of it — the single biggest reason shooting felt like it was happening to
@@ -1581,27 +1758,41 @@ func _update_footsteps(delta: float, playing: bool, player_moving: bool) -> void
 	else:
 		_step_player = 0.0
 
-	var moving: bool = thief["alive"] and (thief["route"] as Array).size() > 0
-	if moving:
-		var tp: Vector2 = thief["pos"]
-		var laden: bool = String(thief["carry"]) != ""
-		_step_thief -= delta
-		if _step_thief <= 0.0:
+	# One timer per body. They are played at each man's own position, so with three of
+	# them the sound itself tells you WHERE each one is — which is most of what a
+	# defending homeowner has to go on, and it was the whole reason footfalls exist.
+	for i in intruders.size():
+		var t: Dictionary = intruders[i]
+		if i >= _step_thieves.size():
+			_step_thieves.append(0.0)
+		var moving: bool = bool(t["alive"]) and (t["route"] as Array).size() > 0
+		if not moving:
+			_step_thieves[i] = 0.0
+			continue
+		var tp: Vector2 = t["pos"]
+		var laden: bool = String(t["carry"]) != ""
+		_step_thieves[i] = float(_step_thieves[i]) - delta
+		if float(_step_thieves[i]) <= 0.0:
 			# a laden man is slower and plants harder
-			_step_thief = 0.62 if laden else 0.46
+			_step_thieves[i] = 0.62 if laden else 0.46
 			_play_at("footstep", Vector3(tp.x, 0.1, tp.y), -4.0 if laden else -6.0)
-	else:
-		_step_thief = 0.0
 
 
 ## The front door, which does not exist as an object — so this is the sound of him
 ## crossing the threshold line. It is the cue that someone has come in.
 func _update_door_sound() -> void:
-	var z: float = thief["pos"].y
+	# Per body: with three of them, one shared last-position would have compared the
+	# wrong man's crossing and clanged the door open when nobody was near it.
 	var door_line: float = Sim.HOUSE.end.y
-	if (_thief_door_z - door_line) * (z - door_line) < 0.0:
-		_play_at("door", Vector3(thief["pos"].x, 1.0, door_line), -6.0)
-	_thief_door_z = z
+	for i in intruders.size():
+		if i >= _thief_door_z.size():
+			_thief_door_z.append(float((intruders[i] as Dictionary)["pos"].y))
+		var t: Dictionary = intruders[i]
+		var z: float = t["pos"].y
+		var last: float = float(_thief_door_z[i])
+		if (last - door_line) * (z - door_line) < 0.0:
+			_play_at("door", Vector3(t["pos"].x, 1.0, door_line), -6.0)
+		_thief_door_z[i] = z
 
 
 ## A mark beside the crosshair pointing at whoever just shot you. The audit's item 13 calls
@@ -1731,13 +1922,35 @@ func _update_debris(delta: float) -> void:
 
 
 ## The non-lethal answer. A shove, not a shot.
+##
+## With more than one intruder the shove goes to the NEAREST man rather than the primary,
+## because `Sim.shove` already tests range (1.9 m) and arc (0.6 rad) — passing it a body
+## across the room would fail its own reach test and the shove would silently do nothing
+## while a man stood right in front of you.
 func _try_shove() -> void:
 	events = []
-	if Sim.shove(player, thief, loot, events):
-		_play_at("impact", Vector3(thief["pos"].x, 1.2, thief["pos"].y), 0.0)
+	var target: Dictionary = _nearest_intruder()
+	if target.is_empty():
+		return
+	if Sim.shove(player, target, loot, events):
+		_play_at("impact", Vector3(target["pos"].x, 1.2, target["pos"].y), 0.0)
 		if player_actor != null:
 			player_actor.play_once(Actor.SHOOT)
 	_drain_events()
+
+
+## The living intruder nearest the homeowner, or an empty dictionary.
+func _nearest_intruder() -> Dictionary:
+	var best := {}
+	var bd := INF
+	for t in intruders:
+		if not bool((t as Dictionary)["alive"]):
+			continue
+		var d: float = (player["pos"] as Vector2).distance_to((t as Dictionary)["pos"])
+		if d < bd:
+			bd = d
+			best = t
+	return best
 
 
 ## Drive the van in at the start and out at the end.
@@ -1908,10 +2121,24 @@ func _refresh_hud() -> void:
 	# is information the player has not earned; the whole point of the minimap's fog of war
 	# is that he has to be found. This reports what the homeowner can actually tell.
 	# "running" is fair — a man breaking off and bolting is not subtle.
-	var tstate := "down" if not thief["alive"] else (
-		"running" if String(thief["mode"]) == "flee" else (
-			"hurting" if thief["hp"] <= Sim.THIEF_MAX_HP * 0.4 else (
-				"hit" if thief["hp"] < Sim.THIEF_MAX_HP else "unhurt")))
+	# One word about the whole crew, taken from the most alarming body still standing.
+	# Reading a single thief's fields here would have described a corpse while two men
+	# carried the house out behind you.
+	var alive_n := 0
+	var tstate := "all down"
+	for t in intruders:
+		var it: Dictionary = t
+		if not bool(it["alive"]):
+			continue
+		alive_n += 1
+		var one := "running" if String(it["mode"]) == "flee" else (
+			"hurting" if float(it["hp"]) <= Sim.THIEF_MAX_HP * 0.4 else (
+				"hit" if float(it["hp"]) < Sim.THIEF_MAX_HP else "unhurt"))
+		tstate = one
+		if one != "unhurt":
+			break
+	if alive_n > 1:
+		tstate += " x%d" % alive_n
 	if _shot_fire or _shot_walk or _shot_frames != -1:
 		# capture mode only: the raw numbers underneath the state, so AI and movement can be
 		# read straight out of a frame instead of guessed at
@@ -1953,7 +2180,7 @@ func _update_hit_marker(delta: float) -> void:
 
 func _draw_minimap() -> void:
 	if minimap != null and not player.is_empty():
-		minimap.update_state({"pos": player["pos"], "yaw": yaw}, thief, loot)
+		minimap.update_state({"pos": player["pos"], "yaw": yaw}, intruders, loot)
 
 
 func _show_overlay(win: bool) -> void:
@@ -1964,8 +2191,9 @@ func _show_overlay(win: bool) -> void:
 	# no longer "the van drove off": the van is scenery and never moves, so the text was
 	# contradicting the screen. See ROADMAP item 22 for making it actually leave.
 	if win:
-		_ov_sub.text = ("Intruder neutralised — %d/3 valuables still in the house."
-			% Sim.remaining(loot)) + "  [ENTER] to play again"
+		_ov_sub.text = ("%d of %d intruders neutralised — %d of 3 valuables still in the house."
+			% [_thieves_down, intruders.size(), Sim.remaining(loot)]) \
+			+ "  [ENTER] to play again"
 	elif _ran_off:
 		_ov_sub.text = ("He broke off and ran — %d of 3 with him." % _escaped_with) \
 			+ "  [ENTER] to play again"

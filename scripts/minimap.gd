@@ -15,7 +15,7 @@ const VIEW := Rect2(-22, -24, 44, 40)
 const POLY_EVERY := 3
 
 var player := {}
-var thief := {}
+var thieves: Array = []
 var loot: Array = []
 
 var _poly := PackedVector2Array()
@@ -43,17 +43,29 @@ func _ready() -> void:
 		(size.y - VIEW.size.y * _scale) * 0.5)
 
 
+## World (x, z) -> minimap pixels.
+##
+## The Y AXIS IS INVERTED, and that is the point. In the world, +Z runs from the house
+## out to the street, and the player spawns on the driveway facing the house (yaw 0 faces
+## +Z). Canvas Y grows downward, so mapping +Z to +Y drew the house ABOVE the player while
+## they faced it — the whole map read upside-down and it is what Richard reported as "the
+## minimap is mirrored". It is not mirrored, it is flipped vertically: a mirror reverses
+## handedness, and this only reversed which way was up.
 func _to_map(p: Vector2) -> Vector2:
-	return _off + (p - VIEW.position) * _scale
+	var local := p - VIEW.position
+	return _off + Vector2(local.x, VIEW.size.y - local.y) * _scale
 
 
 func _rect(r: Rect2, c: Color) -> void:
 	draw_rect(Rect2(_to_map(r.position), r.size * _scale), c, true)
 
 
-func update_state(p: Dictionary, t: Dictionary, l: Array) -> void:
+## `t` is either one intruder dictionary (the single-intruder case, kept working) or an
+## array of them. The minimap used to take exactly one body; with three it drew whichever
+## one `game.gd` happened to pass and silently hid the other two.
+func update_state(p: Dictionary, t, l: Array) -> void:
 	player = p
-	thief = t
+	thieves = t if t is Array else [t]
 	loot = l
 	_frame += 1
 	if _frame % POLY_EVERY == 0 or _poly.is_empty():
@@ -105,19 +117,28 @@ func _draw() -> void:
 		var col: Color = C_LOOT_GONE if l["taken"] else C_LOOT
 		draw_circle(_to_map(l["pos"]), 3.5, col)
 
-	# ---- THE REQUIREMENT: the intruder only with line of sight
-	if thief.get("alive", false) and Sim.can_see(ppos, thief["pos"], 30.0):
-		var tp := _to_map(thief["pos"])
-		draw_circle(tp, 5.0, C_THIEF)
-		draw_arc(tp, 5.0, 0.0, TAU, 16, Color(1, 1, 1, 0.8), 1.4)
+	# ---- THE REQUIREMENT: the intruder only with line of sight. Every one of them:
+	# `can_see` is the homeowner's own sight, so a man behind a wall stays hidden even
+	# when two of his friends are in plain view.
+	for t in thieves:
+		var it: Dictionary = t
+		if not bool(it.get("alive", false)):
+			continue
+		if Sim.can_see(ppos, it["pos"], 30.0):
+			var tp := _to_map(it["pos"])
+			draw_circle(tp, 5.0, C_THIEF)
+			draw_arc(tp, 5.0, 0.0, TAU, 16, Color(1, 1, 1, 0.8), 1.4)
 
 	# ---- the homeowner, always, with a facing wedge
 	var mp := _to_map(ppos)
 	draw_circle(mp, 5.0, C_PLAYER)
 	draw_arc(mp, 5.0, 0.0, TAU, 16, Color(1, 1, 1, 0.9), 1.4)
 	var yaw: float = player.get("yaw", 0.0)
-	# world +Z is map +Y, and the yaw is measured from +X toward +Z
-	var fwd := Vector2(cos(yaw), sin(yaw)) * 6.0 * _scale
+	# yaw 0 faces +Z, so the facing vector is (sin yaw, cos yaw) in the world — the same
+	# convention Sim's movement and the shove use. `(cos, sin)` was 90 degrees out. The
+	# screen Y is negated to match the flipped mapping above, so the wedge agrees with the
+	# map instead of pointing into the lawn.
+	var fwd := Vector2(sin(yaw), -cos(yaw)) * 6.0 * _scale
 	draw_line(mp, mp + fwd, Color(1, 1, 1, 0.55), 1.4)
 
 	draw_rect(Rect2(Vector2.ZERO, size), Color(1, 1, 1, 0.16), false, 1.0)
