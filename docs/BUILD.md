@@ -144,6 +144,21 @@ and kernel 7.0 — comfortably inside. Verified in the
   `Idx`/`Jdx` before the first build. **This is a real constraint on porting style**: the
   Godot source uses `i` and `j` freely throughout, so a mechanical port will hit it
   everywhere.
+- **`PI` is a MACRO too** — `UnrealMathUtility.h` defines it as `UE_PI`, so it can never name
+  a variable or a point. Measured 2026-10-08: `const FVector2D PI = Out[Idx];` in
+  `HISim::SeparateAll` produced `expected unqualified-id` and, on the *next* use,
+  `invalid operands to binary expression ('float' and 'TVector2<double>')` — the same
+  signature as the `I`/`J` trap, because the macro silently replaced the variable with
+  `3.14159f`. Renamed to `PosI`. Any short maths-looking name deserves a check before it is
+  used as an identifier.
+- **A module that is not in the `.uproject` does not LOAD, so its tests never register.**
+  UBT discovers `Source/<Module>/<Module>.Build.cs` and compiles it, and a C++ dependency
+  (`PublicDependencyModuleNames` containing `HISim`) links it — but runtime loading is driven
+  by the `.uproject` `Modules` array alone. Measured: `HISim` compiled and linked, `HIUnreal`
+  loaded, `HISim` did not, and `Automation RunTests HI.Sim` reported
+  `No automation tests matched 'HI.Sim'` against **6148 available tests**. The wrapper's
+  exit 1 was correct; without it this looks exactly like a green run. First thing to check
+  whenever a filter matches nothing: `grep "InternalLoadLibrary: '<Module>'"` in the test log.
 - **`tar x` REFUSES TO OVERWRITE existing files.** Re-transferring a corrected source with
   `tar xzf` silently leaves the old one in place, so the rebuild reproduces the previous
   error exactly and looks like the fix did not work. Use **`tar xzmf`** (or delete first).
