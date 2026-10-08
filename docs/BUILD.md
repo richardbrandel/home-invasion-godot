@@ -134,6 +134,27 @@ irrelevant. Required: kernel 4.18+, **glibc 2.28+**, clang 20.1.8. This box has 
 and kernel 7.0 — comfortably inside. Verified in the
 [Linux development requirements](https://dev.epicgames.com/documentation/en-us/unreal-engine/linux-development-requirements-for-unreal-engine).
 
+### Unreal's own C++ traps — porting hazards
+
+- **`I` and `J` are MACROS in Unreal's math library** (the imaginary-unit vector types). They
+  can never be used as loop indices or variable names. The failure is not "unknown symbol" —
+  it surfaces as nonsense like
+  `invalid operands to binary expression ('float' and 'TVector2<double>')` and
+  `expected unqualified-id`, because `P[I]` expands to `P[<vector>]`. Rename every index to
+  `Idx`/`Jdx` before the first build. **This is a real constraint on porting style**: the
+  Godot source uses `i` and `j` freely throughout, so a mechanical port will hit it
+  everywhere.
+- **`tar x` REFUSES TO OVERWRITE existing files.** Re-transferring a corrected source with
+  `tar xzf` silently leaves the old one in place, so the rebuild reproduces the previous
+  error exactly and looks like the fix did not work. Use **`tar xzmf`** (or delete first).
+  Symptom to recognise: byte-identical error output after a change you know you made.
+- **A `-Clean` rebuild recompiles the shared PCH and takes many minutes** on this 4-core box,
+  and the link step is memory-hungry on 22 GB — expect SSH to slow or time out while it runs.
+  That is the box being busy, not the machine being down.
+- **Game modules need their own API macro.** Unreal does not define `MYMODULE_API` for a game
+  module, so a struct decorated with it fails to compile. Guard it:
+  `#ifndef HISIM_API` / `#define HISIM_API` / `#endif`.
+
 ### Four traps, all hit for real
 
 - **`Build.sh` does NOT build UnrealBuildTool by default.** It only does so when `-buildubt`
