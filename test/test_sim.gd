@@ -831,6 +831,48 @@ func _init() -> void:
 			(quiet[0]["prev"] as Vector2).distance_to(q0_before),
 			(quiet[1]["prev"] as Vector2).distance_to(q1_before)])
 
+	_banner("the GROUP path -- step_intruders, which is the only path game.gd calls")
+	# Every other heist assertion in this file drives `step_thief` for ONE thief. That is a
+	# different code path, and until 2026-10-09 the difference was total: `step_intruders`
+	# called `step_thief(..., separate=false)`, which did not write `thief["pos"]` at all,
+	# and then separated the frame-START positions and wrote those back. Measured with
+	# test/probe_intruders.gd: an intruder travelled **0.000 m in 180 simulated seconds**
+	# and finished at exactly his spawn point.
+	#
+	# Both defects are fixed. These two checks are what would have caught either.
+	var gp := Sim.create_player()
+	var gi := Sim.create_intruders(1)
+	var gl := Sim.create_loot()
+	events = []
+	var g_start: Vector2 = gi[0]["pos"]
+	var g_path := 0.0
+	for _i in 300:                      # five seconds; `think` alone is 2.0 s
+		var was: Vector2 = gi[0]["pos"]
+		Sim.step_intruders(gi, gp, gl, events, 1.0 / 60.0)
+		g_path += was.distance_to(gi[0]["pos"])
+		events = []
+	check("an intruder driven by step_intruders actually MOVES (%.2f m in 5 s)" % g_path,
+		g_path > 1.0,
+		"from %s to %s" % [str(g_start), str(gi[0]["pos"])])
+
+	# And the whole heist, with three of them, which is what the game runs.
+	var gp2 := Sim.create_player()
+	var gi2 := Sim.create_intruders(3)
+	var gl2 := Sim.create_loot()
+	events = []
+	var g_t := 0.0
+	var g_delivered := 0
+	while g_t < 400.0 and Sim.remaining(gl2) > 0:
+		Sim.step_intruders(gi2, gp2, gl2, events, 1.0 / 60.0)
+		for ev in events:
+			if str(ev.get("type", "")) == "delivered":
+				g_delivered += 1
+		events = []
+		g_t += 1.0 / 60.0
+	check("THREE intruders empty the house through the group path (%d/3 in %.1fs)" % [g_delivered, g_t],
+		Sim.remaining(gl2) == 0 and g_delivered == 3,
+		"remaining=%d delivered=%d after %.1fs" % [Sim.remaining(gl2), g_delivered, g_t])
+
 	_banner("damage")
 	var th := Sim.create_thief()
 	events = []

@@ -808,7 +808,15 @@ static func step_intruders(intruders: Array[Dictionary], player: Dictionary,
 	for _t in intruders:
 		radii.append(THIEF_RADIUS)
 
-	var after := separate_all(before, radii)
+	# THE SEPARATION RUNS ON THE POST-STEP POSITIONS. `before` is the frame-START positions
+	# and is still what `prev` is taken from; sending `before` to `separate_all` and writing
+	# the result back handed every body its own start position, which is the second half of
+	# the same bug as the one in `step_thief` above.
+	var stepped: Array[Vector2] = [player["pos"] as Vector2]
+	for t in intruders:
+		stepped.append(t["pos"] as Vector2)
+
+	var after := separate_all(stepped, radii)
 	player["pos"] = after[0]
 	for idx in intruders.size():
 		var t: Dictionary = intruders[idx]
@@ -1038,6 +1046,19 @@ static func step_thief(thief: Dictionary, player: Dictionary, loot: Array, event
 	# ---- solid bodies: neither may stand inside the other. Applied here, once
 	# both have moved — the homeowner's step is taken by the caller before this.
 	# Skipped when the caller resolves the whole group at once (`step_intruders`).
+	# THE STEP'S RESULT IS ALWAYS WRITTEN BACK. This used to sit inside `if separate:`
+	# below, which meant `step_thief(t, ..., false)` -- the call `step_intruders` makes --
+	# computed a new `tpos` every frame and threw it away. `separate` gates the PAIRWISE
+	# SEPARATION, not the movement.
+	#
+	# Measured 2026-10-09 with test/probe_intruders.gd: through `step_intruders`, an
+	# intruder travelled **0.000 m in 180 simulated seconds** and finished at exactly his
+	# spawn point, (0.0, 5.0). Through `step_thief` alone he completes the heist. Since
+	# `game.gd` only ever calls `step_intruders`, NO INTRUDER HAS MOVED since the
+	# three-intruder work landed -- and nothing caught it, because every heist assertion in
+	# test_sim.gd drives `step_thief` for a single thief.
+	thief["pos"] = tpos
+
 	if separate:
 		var pair := separate_bodies(ppos, tpos)
 		ppos = pair[0]
