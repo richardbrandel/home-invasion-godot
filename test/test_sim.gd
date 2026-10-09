@@ -873,6 +873,23 @@ func _init() -> void:
 		Sim.remaining(gl2) == 0 and g_delivered == 3,
 		"remaining=%d delivered=%d after %.1fs" % [Sim.remaining(gl2), g_delivered, g_t])
 
+	# ---- every piece of furniture must be INSIDE the house
+	#
+	# Added 2026-10-09, after the living-room rug was found at z -8.60 against a house of
+	# z -19..-8: 1.2 m of it lay out on the drive, and it had been there since the literal
+	# was written. Nothing caught it because a rug is `flat`, so it is excluded from
+	# `_solids()` and was never drawn -- and an invisible object cannot look wrong. The
+	# Unreal port drawing flat furniture is what exposed it. This is the check that makes
+	# the whole class of "a room's contents are outside the room" fail loudly.
+	var outside := ""
+	for f in Sim.FURNITURE:
+		var r: Rect2 = f["rect"]
+		if not Sim.HOUSE.encloses(r):
+			outside += "%s at %s; " % [f["kind"], r]
+	check("every furniture rect is inside the house", outside == "", outside)
+	check("and that check can fail (a rug one metre out is rejected)",
+		not Sim.HOUSE.encloses(Rect2(-7.60, -8.60, 4.40, 1.80)))
+
 	_banner("damage")
 	var th := Sim.create_thief()
 	events = []

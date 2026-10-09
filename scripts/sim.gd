@@ -47,7 +47,12 @@ static var FURNITURE: Array[Dictionary] = [
 	{"rect": Rect2(-7.00, -14.10, 0.40, 0.40), "h": 0.45, "kind": "side_table"},
 	{"rect": Rect2(-5.60, -11.70, 1.40, 1.40), "h": 0.42, "kind": "coffee_table"},
 	{"rect": Rect2(-6.40, -13.60, 2.20, 0.50), "h": 0.50, "kind": "tv_stand"},
-	{"rect": Rect2(-7.60, -8.60, 4.40, 1.80), "h": 0.02, "kind": "rug", "flat": true},
+	# z was -8.60, which put 1.2 m of this rug OUTSIDE the south wall and onto the drive:
+	# HOUSE is z -19..-8, so the rug ran to -6.80. Nobody noticed because a rug is `flat`,
+	# so it is excluded from `_solids()` and was never drawn -- until the Unreal port
+	# started drawing flat furniture, which is what exposed it. -10.60 puts it in the
+	# living room, with the sofa's front edge and the lamp standing on it.
+	{"rect": Rect2(-7.60, -10.60, 4.40, 1.80), "h": 0.02, "kind": "rug", "flat": true},
 	{"rect": Rect2(-7.30, -9.90, 0.45, 0.45), "h": 1.60, "kind": "lamp"},
 
 	# ---- kitchen (front east)
