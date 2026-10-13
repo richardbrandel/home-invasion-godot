@@ -11,9 +11,11 @@ Mixamo's API needs three headers:
   X-Requested-With: XMLHttpRequest
 
 Usage:
-  mixamo-fetch.py search  <query> [type]
-  mixamo-fetch.py fetch   <outdir>
-  mixamo-fetch.py clip    <outdir> <name> <query> [character]
+  mixamo-fetch.py search    <query> [type]
+  mixamo-fetch.py chars     [limit]
+  mixamo-fetch.py fetch     <outdir> [both|player|thief]
+  mixamo-fetch.py fetchchar <outdir> <Character Name> <tag>
+  mixamo-fetch.py clip      <outdir> <name> <query> [character]
 """
 import json
 import os
@@ -71,7 +73,28 @@ def search(query: str, kind: str = "Motion,MotionPack", limit: int = 12):
 def characters(limit: int = 24):
     qs = urllib.parse.urlencode({"page": 1, "limit": limit, "order": "relevance",
                                  "type": "Character", "query": ""})
+    # USE limit=110, NOT THE DEFAULT, when resolving a character by name. The catalogue is
+    # 108 characters; at limit=48 this listing silently lacks Brute and Martha while
+    # containing Louise and James, so a perfectly real character resolves to "not found".
+    # `chars` prints a name, `fetch` downloads a mesh, and the two disagreeing is a bug
+    # that reads like a missing asset.
     return call("GET", f"/products?{qs}", with_auth=False).get("results", [])
+
+
+# The clip set, and the Mixamo search query each local name maps to. Shared by `fetch` and
+# `fetchchar` so the two cannot drift. Exact-name matching matters: relevance order happily
+# answers "Walking" with "Walking Left Turn".
+CLIPS = {
+    "idle": "Idle",
+    "walk": "Walking",
+    "run": "Running",
+    "crouch_idle": "Idle Crouching",
+    "crouch_walk": "Crouched Walking",
+    "aim": "Aiming Gun",
+    "shoot": "Shooting Pistol",
+    "reload": "Reloading",
+    "death": "Death",
+}
 
 
 def details(anim_id: str, char_id: str) -> dict:
@@ -167,7 +190,11 @@ if cmd == "search":
         print(f"  {m.get('id')}  {str(m.get('name'))[:48]:<48} {m.get('type')}")
 
 elif cmd == "chars":
-    for c in characters():
+    # THE ARGUMENT WAS IGNORED until 2026-10-13: `chars 110` printed 24 rows and made the
+    # catalogue look small enough to be missing Brute and Martha. It is 108 characters, and
+    # a listing command that silently caps is how a real asset gets called unavailable.
+    limit = int(sys.argv[2]) if len(sys.argv) > 2 else 110
+    for c in characters(limit):
         print(f"  {c.get('id')}  {c.get('name')}")
 
 elif cmd == "clip":
@@ -198,6 +225,47 @@ elif cmd == "clip":
     n = download(url, outdir / f"{name}.fbx")
     print(f"  -> {outdir / (name + '.fbx')}  {n // 1024} KB")
 
+elif cmd == "fetchchar":
+    # Fetch the full clip set for ANY character, not just the two hardcoded in `fetch`.
+    #
+    #   mixamo-fetch.py fetchchar <outdir> <Character Name> <tag>
+    #
+    # Added 2026-10-13: the Unreal port wanted three intruders (James, Brute, Martha)
+    # alongside Louise as the homeowner, and `fetch` could only produce the Godot pair.
+    # Same clip list and the same skin rule -- Mixamo bakes the whole character into
+    # every export, so only the first clip carries the mesh and the other eight are
+    # animation alone, a fraction of the size.
+    if len(sys.argv) < 5:
+        print(__doc__)
+        sys.exit(1)
+    outdir = pathlib.Path(sys.argv[2])
+    cname = sys.argv[3]
+    tag = sys.argv[4]
+    allchars = {c["name"]: c["id"] for c in characters(110)}
+    cid = allchars.get(cname)
+    if not cid:
+        print(f"  !! no character named {cname!r} in {len(allchars)} characters")
+        sys.exit(1)
+    print(f"  === {cname} ({cid}) -> {outdir / tag} ===")
+    for idx, (clip, q) in enumerate(CLIPS.items()):
+        with_skin = (idx == 0)
+        try:
+            hits = search(q)
+            if not hits:
+                print(f"    {clip:<12} no match for {q!r}")
+                continue
+            exact = [h for h in hits
+                     if str(h.get("name", "")).strip().lower() == q.strip().lower()]
+            best = exact[0] if exact else min(hits, key=lambda h: len(str(h.get("name", ""))))
+            url = export(cid, best["id"], f"{tag}_{clip}", skin=with_skin)
+            n = download(url, outdir / tag / f"{clip}.fbx")
+            print(f"    {clip:<12} {best['name'][:34]:<34} -> {n//1024:>5} KB  "
+                  f"{'mesh+anim' if with_skin else 'anim only'}")
+        except Exception as e:
+            msg = str(e).replace(token(), "***")
+            print(f"    {clip:<12} FAILED: {msg[:120]}")
+        time.sleep(4)
+
 elif cmd == "fetch":
     outdir = pathlib.Path(sys.argv[2])
     all_chars = {
@@ -207,19 +275,9 @@ elif cmd == "fetch":
     want = sys.argv[3] if len(sys.argv) > 3 else "both"
     chars = {k: v for k, v in all_chars.items()
              if want == "both" or v[1] == want}
-    clips = {
-        "idle": "Idle",
-        "walk": "Walking",
-        "run": "Running",
-        "crouch_idle": "Idle Crouching",
-        "crouch_walk": "Crouched Walking",
-        "aim": "Aiming Gun",
-        "shoot": "Shooting Pistol",
-        "reload": "Reloading",
-        "death": "Death",
-    }
-    # resolve ids by name
-    allchars = {c["name"]: c["id"] for c in characters(48)}
+    clips = CLIPS
+    # resolve ids by name, over the WHOLE catalogue rather than the first 48
+    allchars = {c["name"]: c["id"] for c in characters(110)}
     print("  available characters:", ", ".join(sorted(allchars))[:300])
     for role, (cname, tag) in chars.items():
         cid = allchars.get(cname)
