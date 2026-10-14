@@ -207,7 +207,10 @@ elif cmd == "clip":
     name = sys.argv[3]
     query = sys.argv[4] if len(sys.argv) > 4 else name
     char_name = sys.argv[5] if len(sys.argv) > 5 else "Romero"
-    allchars = {c["name"]: c["id"] for c in characters(48)}
+    # USE limit=110, NOT 48 -- see characters(): at 48 the listing silently lacks Brute and
+    # Martha, so a perfectly real character resolves to "not found" and the fetch reads like
+    # a missing asset. The catalogue is 108.
+    allchars = {c["name"]: c["id"] for c in characters(110)}
     cid = allchars.get(char_name)
     if not cid:
         print(f"  !! no character named {char_name!r}")
